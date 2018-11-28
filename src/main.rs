@@ -2,6 +2,8 @@ extern crate clap;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+extern crate fs_extra;
+extern crate dirs;
 
 use clap::{Arg, ArgMatches, App, SubCommand};
 use std::path::PathBuf;
@@ -10,17 +12,28 @@ use std::collections::{HashSet, HashMap};
 use std::fmt;
 use std::io;
 use std::fs;
-use std::env;
+
+#[derive(Debug)]
+enum ConfineIoError {
+    IO(io::Error),
+    IOExtra(fs_extra::error::Error),
+}
 
 #[derive(Debug)]
 enum ConfineError {
     Generic(String),
-    IO(io::Error),
+    IO(ConfineIoError),
 }
 
 impl From<io::Error> for ConfineError {
     fn from(e: io::Error) -> ConfineError {
-        ConfineError::IO(e)
+        ConfineError::IO(ConfineIoError::IO(e))
+    }
+}
+
+impl From<fs_extra::error::Error> for ConfineError {
+    fn from(e: fs_extra::error::Error) -> ConfineError {
+        ConfineError::IO(ConfineIoError::IOExtra(e))
     }
 }
 
@@ -100,6 +113,7 @@ trait Action {
 }
 
 struct ActionMove {
+    dry: bool,
 }
 struct ActionLink {
 }
@@ -136,9 +150,6 @@ impl ActionMove {
             warn!("{} already moved, skip", file.display());
             return Ok(());
         }
-        else {
-            warn!("{:?} != {:?}", real_file, dest);
-        }
 
         if dest.exists() {
             trace!("rel_path = {:?}", rel_path);
@@ -148,36 +159,36 @@ impl ActionMove {
         self.do_move_file(&file, &dest)?;
         group.add_meta(&rel_path);
 
-
-        // mv $file $rel_path
-
-        // let real_file = get_real_file(file);
-        // if file != real_file {
-        //     // file is a symlink
-        //     eprintln!("file {} was a symlink to {}", file.display(), real_file.display());
-        // }
-        // let rel_path = file->relative(self.home());
-        // group.meta_add(rel_path);
-
-        // Err("eh".to_string())
         Ok(())
     }
 
     fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<(), ConfineError> {
-        let dest_dir = if from.is_dir() {
-            to
+        let dest_dir = to.parent().unwrap();
+        // let dest_dir = if from.is_dir() {
+        //     to
+        // }
+        // else {
+        //     to.parent().unwrap()
+        // };
+        trace!("dest dir = {:?}", dest_dir);
+        if ! self.dry {
+            fs::create_dir_all(dest_dir)?;
         }
         else {
-            to.parent().unwrap()
-        };
-        trace!("dest dir = {:?}", dest_dir);
-        fs::create_dir_all(dest_dir)?;
+            warn!("dry: mkdir -p '{}'", dest_dir.display());
+        }
+        if ! self.dry {
+            fs_extra::copy_items(&vec![from], dest_dir, &fs_extra::dir::CopyOptions::new())?;
+        }
+        else {
+            warn!("dry: cp -r '{}' '{}'", from.display(), dest_dir.display());
+        }
         Ok(())
     }
 
     fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf), ConfineError> {
         // returns meta entry and relative path
-        let home = env::home_dir().unwrap();
+        let home = dirs::home_dir().unwrap();
         match file.strip_prefix(home) {
             Ok(rel) => return Ok((rel.display().to_string(), rel.to_path_buf())),
             Err(_) => {},
@@ -232,6 +243,7 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
 }
 
 fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>), ConfineError> {
+    let dry_run = args.is_present("dry");
     let (action, groups, files) : (Box<Action>, _, Vec<PathBuf>) =
     if let Some(matches) = args.subcommand_matches("link") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
@@ -239,7 +251,7 @@ fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Acti
     }
     else if let Some(matches) = args.subcommand_matches("move") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
-        (Box::new(ActionMove { }), groups, files)
+        (Box::new(ActionMove { dry: dry_run }), groups, files)
     }
     else {
         return Err("Subcommand missing, see --help")?;
@@ -263,8 +275,8 @@ fn get_group_from_file(p: &str, mut all_groups: &mut Groups) -> (Option<Group>, 
 
 fn init_logger(quiet: bool) {
     let mut builder = env_logger::Builder::from_default_env();
-    let level = if quiet { log::LevelFilter::Info } else { log::LevelFilter::Debug };
-    let level = log::LevelFilter::Trace;
+    let level = if quiet { log::LevelFilter::Error } else { log::LevelFilter::Debug };
+    let level = log::LevelFilter::Trace; // XXX
 
     builder.filter_level(level).init();
 }
@@ -314,7 +326,8 @@ fn main() -> Result<(), ConfineError> {
         .get_matches();
     
 
-    let quiet = matches.is_present("quiet");
+    let dry = matches.is_present("dry");
+    let quiet = matches.is_present("quiet") && ! dry;
     init_logger(quiet);
 
     let root = PathBuf::from(matches.value_of("root").unwrap()).canonicalize().unwrap();

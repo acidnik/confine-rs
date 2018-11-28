@@ -7,3 +7,5 @@ authors = ["Nikita Bilous <nsbilous@domclick.ru>"]
 clap = "*"
 log = "*"
 env_logger = "*"
+fs_extra = "*"
+dirs = "*"
