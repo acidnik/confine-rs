@@ -1,20 +1,74 @@
 extern crate clap;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 
 use clap::{Arg, ArgMatches, App, SubCommand};
 use std::path::PathBuf;
 use std::collections::{HashSet, HashMap};
 
+use std::fmt;
+use std::io;
+use std::fs;
+use std::env;
+
+#[derive(Debug)]
+enum ConfineError {
+    Generic(String),
+    IO(io::Error),
+}
+
+impl From<io::Error> for ConfineError {
+    fn from(e: io::Error) -> ConfineError {
+        ConfineError::IO(e)
+    }
+}
+
+impl From<String> for ConfineError {
+    fn from(e: String) -> ConfineError {
+        ConfineError::Generic(e)
+    }
+}
+
+impl<'a> From<&'a str> for ConfineError {
+    fn from(e: &str) -> ConfineError {
+        ConfineError::Generic(e.to_string())
+    }
+}
 
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct Group {
+    root: PathBuf,
     dir: PathBuf,
+}
+
+impl Group {
+    fn new(root: PathBuf, path: &str) -> Result<Self, ConfineError> {
+        if let Some(idx) = path.find('/') {
+            return Err("Invalid group name")?;
+        }
+        return Ok(Group { dir: PathBuf::from(path), root: root });
+    }
+    fn add_meta(&self, entry: &PathBuf) {
+
+    }
+    fn abs_path(&self) -> PathBuf {
+        return self.root.join(self.dir.clone())
+    }
 }
 
 #[derive(Debug)]
 struct Groups {
     root: PathBuf,
     groups: HashMap<String, Group>,
+}
+
+impl fmt::Display for Group {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{}", self.dir.display())
+    }
+    
 }
 
 impl Groups {
@@ -24,34 +78,36 @@ impl Groups {
             groups: HashMap::new(),
         }
     }
-    fn is_group(&mut self, g: &str) -> bool {
-        if self.groups.contains_key(g) {
-            return true;
+    fn is_group(&mut self, root: PathBuf, g: &str) -> Option<Group> {
+        if g.len() == 0 {
+            return None;
+        }
+        if let Some(group) = self.groups.get(g) {
+            return Some(group.clone());
         }
         let p = self.root.join(g);
         if p.is_dir() {
-            self.groups.insert(g.to_string(), Group { dir: PathBuf::from(p) });
-            return true;
+            let group = Group::new(root, g).unwrap();
+            self.groups.insert(g.to_string(), group.clone());
+            return Some(group);
         }
-        return false;
+        return None;
     }
 }
 
 trait Action {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), String>;
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError>;
 }
 
 struct ActionMove {
-    quiet: bool,
 }
 struct ActionLink {
-    // because who needs inheritance, right, rust?
-    quiet: bool,
 }
 
 impl Action for ActionMove {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), String> {
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError> {
         for file in files {
+            debug!("move [{}] {}", group, file.display());
             self.move_file(&group, &file)?;
         }
         Ok(())
@@ -59,9 +115,42 @@ impl Action for ActionMove {
 }
 
 impl ActionMove {
-    fn move_file(&self, group: &Group, file: &PathBuf) -> Result<(), String> {
+    fn move_file(&self, group: &Group, file: &PathBuf) -> Result<(), ConfineError> {
+        let real_file = file.canonicalize()?;
+        trace!("real file = {:?}", real_file);
+        /*
+            if file is inside a home dir - strip_prefix(~) and save relative path
+            else - save absolute path, e.g. /etc/bash/bashrc
+            in later case create full path under group:
+            common/etc/bash/bashrc
+            meta.txt:
+            /etc/bash/bashrc
+        */
 
-        // let file = file.absolute();
+        let (meta_entry, rel_path) = self.get_rel_path(&file)?; // relative to $HOME, or absolute, if not in home dir
+        trace!("get_rel_path({:?}) => {}, {:?}", file, meta_entry, rel_path);
+
+        let dest = group.abs_path().join(rel_path.clone());
+
+        if dest == real_file {
+            warn!("{} already moved, skip", file.display());
+            return Ok(());
+        }
+        else {
+            warn!("{:?} != {:?}", real_file, dest);
+        }
+
+        if dest.exists() {
+            trace!("rel_path = {:?}", rel_path);
+            return Err(format!("Can not move file {} to {} ({}): file exists", file.display(), group, dest.display()))?;
+        }
+
+        self.do_move_file(&file, &dest)?;
+        group.add_meta(&rel_path);
+
+
+        // mv $file $rel_path
+
         // let real_file = get_real_file(file);
         // if file != real_file {
         //     // file is a symlink
@@ -70,12 +159,38 @@ impl ActionMove {
         // let rel_path = file->relative(self.home());
         // group.meta_add(rel_path);
 
+        // Err("eh".to_string())
         Ok(())
+    }
+
+    fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<(), ConfineError> {
+        let dest_dir = if from.is_dir() {
+            to
+        }
+        else {
+            to.parent().unwrap()
+        };
+        trace!("dest dir = {:?}", dest_dir);
+        fs::create_dir_all(dest_dir)?;
+        Ok(())
+    }
+
+    fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf), ConfineError> {
+        // returns meta entry and relative path
+        let home = env::home_dir().unwrap();
+        match file.strip_prefix(home) {
+            Ok(rel) => return Ok((rel.display().to_string(), rel.to_path_buf())),
+            Err(_) => {},
+        }
+        return match file.strip_prefix(PathBuf::from("/")) {
+            Ok(rel) => Ok((file.display().to_string(), rel.to_path_buf())),
+            Err(e) => Err(format!("{}", e))?,
+        }
     }
 }
 
 impl Action for ActionLink {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), String> {
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError> {
         Ok(())
     }
 }
@@ -99,6 +214,10 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
         groups.insert(group);
         new_files.push(group_file);
     }
+    else {
+        let root = all_groups.root.clone();
+        groups.insert(Group::new(root, group_param).unwrap());
+    }
 
     // check if any file is actually a group/file
     for file in files {
@@ -112,19 +231,18 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
     (new_files, groups)
 }
 
-fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>), String> {
-    let quiet = args.is_present("quiet");
+fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>), ConfineError> {
     let (action, groups, files) : (Box<Action>, _, Vec<PathBuf>) =
     if let Some(matches) = args.subcommand_matches("link") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
-        (Box::new(ActionLink { quiet: quiet }), groups, files)
+        (Box::new(ActionLink { }), groups, files)
     }
     else if let Some(matches) = args.subcommand_matches("move") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
-        (Box::new(ActionMove { quiet: quiet }), groups, files)
+        (Box::new(ActionMove { }), groups, files)
     }
     else {
-        return Err("Subcommand missing, see --help".to_string());
+        return Err("Subcommand missing, see --help")?;
     };
 
     Ok((action, groups, files))
@@ -133,16 +251,25 @@ fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Acti
 fn get_group_from_file(p: &str, mut all_groups: &mut Groups) -> (Option<Group>, PathBuf) {
     if let Some(idx) = p.find('/') {
         let dir = &p[0..idx];
-        if all_groups.is_group(dir) {
-            let p = PathBuf::from(&p[(idx+1)..]);
-            let dir = PathBuf::from(dir);
-            return (Some(Group{dir}), p);
+        let root = all_groups.root.clone();
+        if let Some(group) = all_groups.is_group(root, dir) {
+            let pf = PathBuf::from(&p[(idx+1)..]);
+            // let group = Group::new(root, dir).unwrap();
+            return (Some(group), pf);
         }
     }
     (None, PathBuf::from(p))
 }
 
-fn main() -> Result<(), String> {
+fn init_logger(quiet: bool) {
+    let mut builder = env_logger::Builder::from_default_env();
+    let level = if quiet { log::LevelFilter::Info } else { log::LevelFilter::Debug };
+    let level = log::LevelFilter::Trace;
+
+    builder.filter_level(level).init();
+}
+
+fn main() -> Result<(), ConfineError> {
     let matches = App::new("confine")
         .version("0.0.1")
         .author("Nikita Bilous <nikita@bilous.me>")
@@ -185,14 +312,19 @@ fn main() -> Result<(), String> {
             )
         )
         .get_matches();
-    // let confine = Confine::new(matches);
+    
+
+    let quiet = matches.is_present("quiet");
+    init_logger(quiet);
+
     let root = PathBuf::from(matches.value_of("root").unwrap()).canonicalize().unwrap();
     let mut all_groups = Groups::new(root);
     let (action, groups, files) = parse_args(matches, &mut all_groups)?;
-    println!("{:?}   {:?}", groups, files);
-    // let (groups, files) = parse_files(args);
+    trace!("group = {:?}, files = {:?}", groups, files);
     if groups.len() != 1 {
-        return Err(format!("too many groups: {:?}", groups))
+        return Err(format!("too many groups: {:?}", groups))?
     }
+    let group = groups.iter().take(1).collect::<Vec<_>>()[0];
+    action.run(group, files)?;
     Ok(())
 }

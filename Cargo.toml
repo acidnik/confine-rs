@@ -5,3 +5,5 @@ authors = ["Nikita Bilous <nsbilous@domclick.ru>"]
 
 [dependencies]
 clap = "*"
+log = "*"
+env_logger = "*"
