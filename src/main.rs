@@ -12,42 +12,9 @@ use std::collections::{HashSet, HashMap};
 use std::fmt;
 use std::io;
 use std::fs;
+use std::error;
 
-#[derive(Debug)]
-enum ConfineIoError {
-    IO(io::Error),
-    IOExtra(fs_extra::error::Error),
-}
-
-#[derive(Debug)]
-enum ConfineError {
-    Generic(String),
-    IO(ConfineIoError),
-}
-
-impl From<io::Error> for ConfineError {
-    fn from(e: io::Error) -> ConfineError {
-        ConfineError::IO(ConfineIoError::IO(e))
-    }
-}
-
-impl From<fs_extra::error::Error> for ConfineError {
-    fn from(e: fs_extra::error::Error) -> ConfineError {
-        ConfineError::IO(ConfineIoError::IOExtra(e))
-    }
-}
-
-impl From<String> for ConfineError {
-    fn from(e: String) -> ConfineError {
-        ConfineError::Generic(e)
-    }
-}
-
-impl<'a> From<&'a str> for ConfineError {
-    fn from(e: &str) -> ConfineError {
-        ConfineError::Generic(e.to_string())
-    }
-}
+type Result<T> = std::result::Result<T, Box<error::Error>>;
 
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
@@ -57,7 +24,7 @@ struct Group {
 }
 
 impl Group {
-    fn new(root: PathBuf, path: &str) -> Result<Self, ConfineError> {
+    fn new(root: PathBuf, path: &str) -> Result<Self> {
         if let Some(idx) = path.find('/') {
             return Err("Invalid group name")?;
         }
@@ -109,7 +76,7 @@ impl Groups {
 }
 
 trait Action {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError>;
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<()>;
 }
 
 struct ActionMove {
@@ -119,7 +86,7 @@ struct ActionLink {
 }
 
 impl Action for ActionMove {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError> {
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<()> {
         for file in files {
             debug!("move [{}] {}", group, file.display());
             self.move_file(&group, &file)?;
@@ -129,7 +96,7 @@ impl Action for ActionMove {
 }
 
 impl ActionMove {
-    fn move_file(&self, group: &Group, file: &PathBuf) -> Result<(), ConfineError> {
+    fn move_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
         let real_file = file.canonicalize()?;
         trace!("real file = {:?}", real_file);
         /*
@@ -162,7 +129,7 @@ impl ActionMove {
         Ok(())
     }
 
-    fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<(), ConfineError> {
+    fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<()> {
         let dest_dir = to.parent().unwrap();
         // let dest_dir = if from.is_dir() {
         //     to
@@ -186,7 +153,7 @@ impl ActionMove {
         Ok(())
     }
 
-    fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf), ConfineError> {
+    fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf)> {
         // returns meta entry and relative path
         let home = dirs::home_dir().unwrap();
         match file.strip_prefix(home) {
@@ -201,7 +168,7 @@ impl ActionMove {
 }
 
 impl Action for ActionLink {
-    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<(), ConfineError> {
+    fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<()> {
         Ok(())
     }
 }
@@ -242,7 +209,7 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
     (new_files, groups)
 }
 
-fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>), ConfineError> {
+fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>)> {
     let dry_run = args.is_present("dry");
     let (action, groups, files) : (Box<Action>, _, Vec<PathBuf>) =
     if let Some(matches) = args.subcommand_matches("link") {
@@ -281,7 +248,7 @@ fn init_logger(quiet: bool) {
     builder.filter_level(level).init();
 }
 
-fn main() -> Result<(), ConfineError> {
+fn main() -> Result<()> {
     let matches = App::new("confine")
         .version("0.0.1")
         .author("Nikita Bilous <nikita@bilous.me>")
