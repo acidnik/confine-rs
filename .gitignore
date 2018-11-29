@@ -1,3 +1,7 @@
 /target
 **/*.rs.bk
 Cargo.lock
+**/__pycache__
+**/venv
+t/test_home
+t/common

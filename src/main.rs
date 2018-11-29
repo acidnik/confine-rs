@@ -40,7 +40,7 @@ impl<'a> Meta<'a> {
             return Ok(());
         }
         trace!("new meta: {:?}", lines);
-        fs::write(&meta_file, lines.connect("\n") + "\n")?;
+        fs::write(&meta_file, lines.join("\n") + "\n")?;
 
         Ok(())
     }
@@ -110,6 +110,7 @@ trait Action {
 
 struct ActionMove {
     dry: bool,
+    home: PathBuf,
 }
 struct ActionLink {
 }
@@ -126,6 +127,13 @@ impl Action for ActionMove {
 
 impl ActionMove {
     fn move_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+        let file = if file.is_relative() {
+            self.home.join(file)
+        }
+        else {
+            file.clone()
+        };
+        trace!("canon {:?}", file);
         let real_file = file.canonicalize()?;
         trace!("real file = {:?}", real_file);
         /*
@@ -185,7 +193,7 @@ impl ActionMove {
 
     fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf)> {
         // returns meta entry and relative path
-        let home = dirs::home_dir().unwrap();
+        let home = &self.home;
         match file.strip_prefix(home) {
             Ok(rel) => return Ok((rel.display().to_string(), rel.to_path_buf())),
             Err(_) => {},
@@ -217,6 +225,7 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
     
     // check if group is actually a group/file
     let group_param = matches.value_of("group").unwrap();
+    trace!("group_param = {}", group_param);
     let (group, group_file) = get_group_from_file(&group_param, &mut all_groups);
     if let Some(group) = group {
         groups.insert(group);
@@ -241,6 +250,7 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
 
 fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Action>, HashSet<Group>, Vec<PathBuf>)> {
     let dry_run = args.is_present("dry");
+    let home = args.value_of("home").map_or(dirs::home_dir().unwrap(), |p| PathBuf::from(p).canonicalize().unwrap());
     let (action, groups, files) : (Box<Action>, _, Vec<PathBuf>) =
     if let Some(matches) = args.subcommand_matches("link") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
@@ -248,7 +258,7 @@ fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Acti
     }
     else if let Some(matches) = args.subcommand_matches("move") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
-        (Box::new(ActionMove { dry: dry_run }), groups, files)
+        (Box::new(ActionMove { dry: dry_run, home: home }), groups, files)
     }
     else {
         return Err("Subcommand missing, see --help")?;
@@ -292,7 +302,10 @@ fn main() -> Result<()> {
              .help("dry run")
         )
         .arg(Arg::with_name("home")
-             .hidden(true)
+             .long("home")
+             .takes_value(true)
+             // .hidden(true)
+             .help("ovveride home dir")
         )
         .arg(Arg::with_name("root")
              .short("r")
