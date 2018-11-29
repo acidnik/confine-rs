@@ -3,5 +3,5 @@
 Cargo.lock
 **/__pycache__
 **/venv
-t/test_home
+t/home_test
 t/common

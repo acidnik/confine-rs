@@ -4,25 +4,40 @@ extern crate log;
 extern crate env_logger;
 extern crate fs_extra;
 extern crate dirs;
+extern crate hostname;
 
 use clap::{Arg, ArgMatches, App, SubCommand};
 use std::path::PathBuf;
 use std::collections::{HashSet, HashMap};
 
 use std::fmt;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::fs;
 use std::error;
 
 type Result<T> = std::result::Result<T, Box<error::Error>>;
 
-struct Meta<'a> {
-    group: &'a Group,
+struct Meta {
+    meta_file: PathBuf,
+    entries: Vec<String>,
 }
 
-impl<'a> Meta<'a> {
+impl Meta {
+    fn new(group: &Group) -> Result<Self> {
+        let meta_file = group.abs_path().join("meta.txt");
+        let entries = if meta_file.exists() {
+            io::BufReader::new(fs::File::open(PathBuf::from(&meta_file))?)
+                .lines()
+                .map(|l| l.unwrap())
+                .collect::<Vec<_>>()
+        }
+        else {
+            Vec::new()
+        };
+        Ok(Self {meta_file, entries})
+    }
     fn add(&self, entry: &PathBuf) -> Result<()> {
-        let meta_file = self.group.abs_path().join("meta.txt");
+        let meta_file = &self.meta_file;
         trace!("{:?} add {:?}", meta_file, entry);
         let entry_str = entry.to_str().unwrap().to_string();
         if ! meta_file.exists() {
@@ -30,7 +45,7 @@ impl<'a> Meta<'a> {
             fs::write(&meta_file, entry_str + "\n")?;
             return Ok(());
         }
-        let mut lines = io::BufReader::new(fs::File::open(&meta_file)?).lines().map(|l| l.unwrap()).collect::<Vec<_>>();
+        let mut lines = self.list()?;
         let len_before = lines.len();
         lines.push(entry_str);
         lines.sort();
@@ -44,6 +59,13 @@ impl<'a> Meta<'a> {
 
         Ok(())
     }
+    fn list(&self) -> Result<Vec<String>> {
+        Ok(self.entries.clone())
+    }
+    fn check(&self, entry: &PathBuf) -> bool {
+        // is entry in meta.txt?
+        self.entries.iter().find(|&e| &PathBuf::from(e) == entry).is_some()
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
@@ -54,13 +76,13 @@ struct Group {
 
 impl Group {
     fn new(root: PathBuf, path: &str) -> Result<Self> {
-        if let Some(idx) = path.find('/') {
+        if let Some(_) = path.find('/') {
             return Err("Invalid group name")?;
         }
         return Ok(Group { dir: PathBuf::from(path), root: root, });
     }
     fn add_meta(&self, entry: &PathBuf) -> Result<()> {
-        let meta = Meta { group: self };
+        let meta = Meta::new(&self)?;
         meta.add(entry)
     }
     fn abs_path(&self) -> PathBuf {
@@ -96,6 +118,8 @@ impl Groups {
         }
         let p = self.root.join(g);
         if p.is_dir() {
+            // not checking if meta.txt presents in dir, thou it seems like a good idea, because on
+            // first mv there'll be no such file
             let group = Group::new(root, g).unwrap();
             self.groups.insert(g.to_string(), group.clone());
             return Some(group);
@@ -113,6 +137,8 @@ struct ActionMove {
     home: PathBuf,
 }
 struct ActionLink {
+    dry: bool,
+    home: PathBuf,
 }
 
 impl Action for ActionMove {
@@ -181,7 +207,7 @@ impl ActionMove {
             let from_vec = vec![from];
             fs_extra::copy_items(&from_vec, dest_dir, &fs_extra::dir::CopyOptions::new())?;
             fs_extra::remove_items(&from_vec)?;
-            std::os::unix::fs::symlink(&to, &from)?
+            std::os::unix::fs::symlink(&to, &from)?;
         }
         else {
             warn!("dry: cp -r '{}' '{}'", from.display(), dest_dir.display());
@@ -192,7 +218,7 @@ impl ActionMove {
     }
 
     fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf)> {
-        // returns meta entry and relative path
+        // returns meta entry and relative path (relative to home or root dir)
         let home = &self.home;
         match file.strip_prefix(home) {
             Ok(rel) => return Ok((rel.display().to_string(), rel.to_path_buf())),
@@ -207,14 +233,91 @@ impl ActionMove {
 
 impl Action for ActionLink {
     fn run(&self, group: &Group, files: Vec<PathBuf>) -> Result<()> {
+        let meta = Meta::new(&group)?;
+        let files = if files.len() > 0 {
+            files
+        }
+        else {
+            meta.list()?.into_iter().map(|f| PathBuf::from(f)).collect()
+        };
+        for file in files {
+            debug!("link [{}] {}", group, file.display());
+            if ! meta.check(&file) {
+                Err(format!("file {} not in meta.txt", file.display()))?
+            }
+            self.link_file(&group, &file)?;
+        }
+        Ok(())
+    }
+
+}
+
+impl ActionLink {
+    fn link_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+        let src = group.abs_path().join(file);
+        let dest = if file.is_relative() {
+            self.home.join(file)
+        }
+        else {
+            file.clone()
+        };
+        if dest.exists() {
+            let destd = dest.display();
+            warn!("link: destination file {} exists", destd);
+            if fs::symlink_metadata(&dest)?.file_type().is_symlink() {
+                let dest_canon = dest.canonicalize()?;
+                if dest_canon == src {
+                    warn!("{} is already a link to {}", src.display(), destd);
+                    return Ok(());
+                }
+                warn!("link: destination file {} is symlink, removing", destd);
+                if ! self.dry {
+                    fs::remove_file(&dest)?
+                }
+                else {
+                    warn!("dry: rm '{}'", destd);
+                }
+            }
+            else {
+                warn!("creating backup for {} before erasing", destd);
+                self.backup_file(&group, &dest)?;
+                if ! self.dry {
+                    // fs::remove_dir_all(&dest)?
+                }
+                else {
+                    warn!("dry: rm -rf '{}'", destd);
+                }
+            }
+        }
+        trace!("link {:?} -> {:?}", src, dest);
+        if ! self.dry {
+            std::os::unix::fs::symlink(&src, &dest)?;
+        }
+        else {
+            warn!("dry: ln -s '{}' '{}'", src.display(), dest.display());
+        }
+
+        Ok(())
+    }
+
+    fn backup_file(&self, group: &Group, path: &PathBuf) -> Result<()> {
+        let path = path.canonicalize()?;
+        let rel_path = path.strip_prefix(self.home.clone())?;
+        let hostname = hostname::get_hostname().unwrap();
+        let backup_dest = group.root.join("backup").join(&hostname).join(&rel_path);
+        if ! self.dry {
+            fs::create_dir_all(backup_dest.parent().unwrap())?
+        }
+        else {
+            warn!("dry: mkdir -p '{}'", backup_dest.parent().unwrap().display());
+        }
+        trace!("backup to {:?}", backup_dest);
+
         Ok(())
     }
 }
 
 fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Vec<PathBuf>, HashSet<Group>) {
-    // TODO allow full path in group or file, get absolute path and remove root
-
-    let arg_files = matches.values_of("files");
     let files = match matches.values_of("files") {
         Some(files) => files.map(|f| f.to_string()).collect(),
         None => Vec::new(),
@@ -254,7 +357,7 @@ fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Acti
     let (action, groups, files) : (Box<Action>, _, Vec<PathBuf>) =
     if let Some(matches) = args.subcommand_matches("link") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
-        (Box::new(ActionLink { }), groups, files)
+        (Box::new(ActionLink { dry: dry_run, home: home }), groups, files)
     }
     else if let Some(matches) = args.subcommand_matches("move") {
         let (files, mut groups) = get_files_from_args(&matches, &mut all_groups);
@@ -267,13 +370,12 @@ fn parse_args(args: ArgMatches, mut all_groups: &mut Groups) -> Result<(Box<Acti
     Ok((action, groups, files))
 }
 
-fn get_group_from_file(p: &str, mut all_groups: &mut Groups) -> (Option<Group>, PathBuf) {
+fn get_group_from_file(p: &str, all_groups: &mut Groups) -> (Option<Group>, PathBuf) {
     if let Some(idx) = p.find('/') {
         let dir = &p[0..idx];
         let root = all_groups.root.clone();
         if let Some(group) = all_groups.is_group(root, dir) {
             let pf = PathBuf::from(&p[(idx+1)..]);
-            // let group = Group::new(root, dir).unwrap();
             return (Some(group), pf);
         }
     }
