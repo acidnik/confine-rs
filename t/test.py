@@ -27,12 +27,15 @@ os.chdir(test_root)
 home_test=Path(test_root, 'home_test')
 common = Path(test_root, 'common')
 meta = Path(common, 'meta.txt')
+backup = Path(test_root, 'backup')
 
 def setup():
     if home_test.exists():
         rmtree(home_test)
     if common.exists():
         rmtree(common)
+    if backup.exists():
+        rmtree(backup)
     copytree(Path(test_root, 'home'), home_test)
     common.mkdir()
 
@@ -148,5 +151,17 @@ def test_ln_backup():
 
     confine('ln', 'common', '.test_conf')
 
-    assert 0
+    backup = Path(test_root, 'backup')
+    assert backup.exists()
+    host = next(backup.iterdir())
+
+    with open(Path(host, '.test_conf')) as f:
+        t = f.read()
+        assert t == 'oh shi'
+
+
+
+def test_ln_backup_dir():
+    setup()
+
 

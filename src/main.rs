@@ -282,7 +282,13 @@ impl ActionLink {
                 warn!("creating backup for {} before erasing", destd);
                 self.backup_file(&group, &dest)?;
                 if ! self.dry {
-                    // fs::remove_dir_all(&dest)?
+                    warn!("rm -rf '{}'", destd);
+                    if dest.is_dir() {
+                        fs::remove_dir_all(&dest)?
+                    }
+                    else {
+                        fs::remove_file(&dest)?
+                    }
                 }
                 else {
                     warn!("dry: rm -rf '{}'", destd);
@@ -302,16 +308,17 @@ impl ActionLink {
 
     fn backup_file(&self, group: &Group, path: &PathBuf) -> Result<()> {
         let path = path.canonicalize()?;
-        let rel_path = path.strip_prefix(self.home.clone())?;
+        let rel_path = path.strip_prefix(self.home.clone())?.to_owned();
         let hostname = hostname::get_hostname().unwrap();
-        let backup_dest = group.root.join("backup").join(&hostname).join(&rel_path);
+        let backup_dest = group.root.join("backup").join(&hostname).join(&rel_path).parent().unwrap().to_owned();
         if ! self.dry {
-            fs::create_dir_all(backup_dest.parent().unwrap())?
+            fs::create_dir_all(&backup_dest)?
         }
         else {
-            warn!("dry: mkdir -p '{}'", backup_dest.parent().unwrap().display());
+            warn!("dry: mkdir -p '{}'", backup_dest.display());
         }
-        trace!("backup to {:?}", backup_dest);
+        trace!("backup {:?} to {:?}", path, backup_dest);
+        fs_extra::copy_items(&vec![path], backup_dest, &fs_extra::dir::CopyOptions::new())?;
 
         Ok(())
     }
@@ -328,7 +335,6 @@ fn get_files_from_args(matches: &ArgMatches, mut all_groups: &mut Groups) -> (Ve
     
     // check if group is actually a group/file
     let group_param = matches.value_of("group").unwrap();
-    trace!("group_param = {}", group_param);
     let (group, group_file) = get_group_from_file(&group_param, &mut all_groups);
     if let Some(group) = group {
         groups.insert(group);
