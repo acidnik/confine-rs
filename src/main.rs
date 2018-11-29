@@ -10,12 +10,41 @@ use std::path::PathBuf;
 use std::collections::{HashSet, HashMap};
 
 use std::fmt;
-use std::io;
+use std::io::{self, BufRead, Write};
 use std::fs;
 use std::error;
 
 type Result<T> = std::result::Result<T, Box<error::Error>>;
 
+struct Meta<'a> {
+    group: &'a Group,
+}
+
+impl<'a> Meta<'a> {
+    fn add(&self, entry: &PathBuf) -> Result<()> {
+        let meta_file = self.group.abs_path().join("meta.txt");
+        trace!("{:?} add {:?}", meta_file, entry);
+        let entry_str = entry.to_str().unwrap().to_string();
+        if ! meta_file.exists() {
+            let entry_str = entry.to_str().unwrap().to_string();
+            fs::write(&meta_file, entry_str + "\n")?;
+            return Ok(());
+        }
+        let mut lines = io::BufReader::new(fs::File::open(&meta_file)?).lines().map(|l| l.unwrap()).collect::<Vec<_>>();
+        let len_before = lines.len();
+        lines.push(entry_str);
+        lines.sort();
+        lines.dedup();
+        if lines.len() == len_before {
+            trace!("no new entries for meta");
+            return Ok(());
+        }
+        trace!("new meta: {:?}", lines);
+        fs::write(&meta_file, lines.connect("\n") + "\n")?;
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct Group {
@@ -28,10 +57,11 @@ impl Group {
         if let Some(idx) = path.find('/') {
             return Err("Invalid group name")?;
         }
-        return Ok(Group { dir: PathBuf::from(path), root: root });
+        return Ok(Group { dir: PathBuf::from(path), root: root, });
     }
-    fn add_meta(&self, entry: &PathBuf) {
-
+    fn add_meta(&self, entry: &PathBuf) -> Result<()> {
+        let meta = Meta { group: self };
+        meta.add(entry)
     }
     fn abs_path(&self) -> PathBuf {
         return self.root.join(self.dir.clone())
@@ -48,7 +78,6 @@ impl fmt::Display for Group {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "{}", self.dir.display())
     }
-    
 }
 
 impl Groups {
@@ -124,19 +153,15 @@ impl ActionMove {
         }
 
         self.do_move_file(&file, &dest)?;
-        group.add_meta(&rel_path);
+        if ! self.dry {
+            group.add_meta(&rel_path)?;
+        }
 
         Ok(())
     }
 
     fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<()> {
         let dest_dir = to.parent().unwrap();
-        // let dest_dir = if from.is_dir() {
-        //     to
-        // }
-        // else {
-        //     to.parent().unwrap()
-        // };
         trace!("dest dir = {:?}", dest_dir);
         if ! self.dry {
             fs::create_dir_all(dest_dir)?;
@@ -145,10 +170,15 @@ impl ActionMove {
             warn!("dry: mkdir -p '{}'", dest_dir.display());
         }
         if ! self.dry {
-            fs_extra::copy_items(&vec![from], dest_dir, &fs_extra::dir::CopyOptions::new())?;
+            let from_vec = vec![from];
+            fs_extra::copy_items(&from_vec, dest_dir, &fs_extra::dir::CopyOptions::new())?;
+            fs_extra::remove_items(&from_vec)?;
+            std::os::unix::fs::symlink(&to, &from)?
         }
         else {
             warn!("dry: cp -r '{}' '{}'", from.display(), dest_dir.display());
+            warn!("dry: rm -rf '{}'", from.display());
+            warn!("dry: ln -s '{}' '{}'", to.display(), from.display());
         }
         Ok(())
     }
@@ -260,6 +290,9 @@ fn main() -> Result<()> {
         .arg(Arg::with_name("dry")
              .short("n")
              .help("dry run")
+        )
+        .arg(Arg::with_name("home")
+             .hidden(true)
         )
         .arg(Arg::with_name("root")
              .short("r")
