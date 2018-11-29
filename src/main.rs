@@ -280,10 +280,13 @@ fn get_group_from_file(p: &str, mut all_groups: &mut Groups) -> (Option<Group>, 
     (None, PathBuf::from(p))
 }
 
-fn init_logger(quiet: bool) {
+fn init_logger(quiet: bool, trace: bool) {
     let mut builder = env_logger::Builder::from_default_env();
-    let level = if quiet { log::LevelFilter::Error } else { log::LevelFilter::Debug };
-    let level = log::LevelFilter::Trace; // XXX
+    let level = match (quiet, trace) {
+        (_, true) => log::LevelFilter::Trace,
+        (true, _) => log::LevelFilter::Error,
+        (false, _) => log::LevelFilter::Debug
+    };
 
     builder.filter_level(level).init();
 }
@@ -297,6 +300,11 @@ fn main() -> Result<()> {
              .short("q")
              .help("be quiet")
         )
+        .arg(Arg::with_name("trace")
+             .long("trace")
+             .hidden(true)
+             .help("show trace info")
+        )
         .arg(Arg::with_name("dry")
              .short("n")
              .help("dry run")
@@ -304,8 +312,8 @@ fn main() -> Result<()> {
         .arg(Arg::with_name("home")
              .long("home")
              .takes_value(true)
-             // .hidden(true)
-             .help("ovveride home dir")
+             .hidden(true)
+             .help("override home dir")
         )
         .arg(Arg::with_name("root")
              .short("r")
@@ -341,7 +349,8 @@ fn main() -> Result<()> {
 
     let dry = matches.is_present("dry");
     let quiet = matches.is_present("quiet") && ! dry;
-    init_logger(quiet);
+    let trace = matches.is_present("trace");
+    init_logger(quiet, trace);
 
     let root = PathBuf::from(matches.value_of("root").unwrap()).canonicalize().unwrap();
     let mut all_groups = Groups::new(root);
