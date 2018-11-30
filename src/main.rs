@@ -79,6 +79,9 @@ impl Group {
         if let Some(_) = path.find('/') {
             return Err("Invalid group name")?;
         }
+        if path == "backup" {
+            return Err("Forbidden group name")?;
+        }
         return Ok(Group { dir: PathBuf::from(path), root: root, });
     }
     fn add_meta(&self, entry: &PathBuf) -> Result<()> {
