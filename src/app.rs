@@ -8,6 +8,8 @@ use std::io::{self, BufRead};
 use std::fs;
 use std::error;
 
+use templates::Templates;
+
 struct Meta {
     meta_file: PathBuf,
     entries: Vec<String>,
@@ -91,12 +93,13 @@ impl fmt::Display for Group {
 }
 
 
-type Result<T> = std::result::Result<T, Box<error::Error>>;
+pub type Result<T> = std::result::Result<T, Box<error::Error>>;
 
 pub struct Confine {
     dry: bool,
     home: PathBuf,
     root: PathBuf,
+    templates: Templates,
     groups: HashMap<String, Group>,
 }
 
@@ -113,6 +116,7 @@ impl Confine {
         Self {
             dry: dry,
             home: home,
+            templates: Templates::new(root.clone()),
             root: root,
             groups: HashMap::new(),
         }

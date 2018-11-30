@@ -11,6 +11,7 @@ use clap::{Arg, App, SubCommand};
 use std::error;
 
 mod app;
+mod templates;
 
 fn main() -> Result<(), Box<error::Error>> {
     let matches = App::new("confine")
