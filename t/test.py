@@ -42,7 +42,7 @@ def setup():
 confine_exe = Path(test_root, '../target/debug/confine').absolute()
 
 def confine(*args):
-    args = [ shlex.quote(arg) for arg in args ]
+    args = [ shlex.quote(str(arg)) for arg in args ]
     args = [str(confine_exe), '--trace', '--home', str(home_test), *args]
     print(' '.join(args))
     subprocess.run(args, check=True)
@@ -151,7 +151,6 @@ def test_ln_backup():
 
     confine('ln', 'common', '.test_conf')
 
-    backup = Path(test_root, 'backup')
     assert backup.exists()
     host = next(backup.iterdir())
 
@@ -163,5 +162,29 @@ def test_ln_backup():
 
 def test_ln_backup_dir():
     setup()
+
+    test_dir = Path(home_test, '.config/test_dir')
+
+    confine('mv', 'common', '.config/test_dir')
+    assert test_dir.is_symlink()
+
+    confine('ln', 'common', '.config/test_dir')
+    assert test_dir.is_symlink()
+
+    test_dir.unlink()
+
+    copytree(Path(common, '.config/test_dir'), Path(home_test, '.config/test_dir'))
+
+    confine('ln', 'common', '.config/test_dir')
+    assert test_dir.is_symlink()
+    
+    host = next(backup.iterdir())
+    
+    f = Path(host, '.config/test_dir/test_file')
+
+    assert f.exists()
+
+
+
 
 
