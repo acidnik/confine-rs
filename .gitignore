@@ -5,3 +5,4 @@ Cargo.lock
 **/venv
 t/home_test
 t/common
+t/backup
