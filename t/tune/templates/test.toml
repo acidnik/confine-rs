@@ -1,0 +1,6 @@
+# vim ft=cfg
+# TODO include
+include = ["home"]
+["common/.gitconfig"]
+GIT_USER = "Nikita Bilous"
+GIT_EMAIL = "nikita@bilous.me"

@@ -101,6 +101,7 @@ pub struct Confine {
     root: PathBuf,
     templates: Templates,
     groups: HashMap<String, Group>,
+    template: Option<String>,
 }
 
 impl Confine {
@@ -119,6 +120,7 @@ impl Confine {
             templates: Templates::new(root.clone()),
             root: root,
             groups: HashMap::new(),
+            template: None,
         }
     }
 
@@ -136,6 +138,7 @@ impl Confine {
     pub fn run(&mut self, matches: &ArgMatches) -> Result<()> {
         if let Some(matches) = matches.subcommand_matches("link") {
            let (files, group) = self.get_files_from_args(&matches)?;
+           self.template = matches.value_of("template").map(|s| s.to_string());
            self.link_files(group, files)
         }
         else if let Some(matches) = matches.subcommand_matches("move") {
@@ -147,7 +150,7 @@ impl Confine {
         }
     }
 
-    fn link_files(&self, group: Group, files: Vec<PathBuf>) -> Result<()> {
+    fn link_files(&mut self, group: Group, files: Vec<PathBuf>) -> Result<()> {
         let meta = Meta::new(&group)?;
         let files = if files.len() > 0 {
             files
@@ -156,21 +159,32 @@ impl Confine {
             meta.list()?.into_iter().map(|f| PathBuf::from(f)).collect()
         };
         for file in files {
+            let mut file = file;
             debug!("link [{}] {}", group, file.display());
             if ! meta.check(&file) {
                 Err(format!("file {} not in meta.txt", file.display()))?
+            }
+            let template_name = group.dir.join(&file);
+            if self.templates.needs_template(&template_name) {
+                if self.template.is_none() {
+                    Err(format!("file {}: template required", template_name.display()))?
+                }
+                else {
+                    file = self.templates.process(&template_name, &file, &self.template.clone().unwrap())?;
+                }
             }
             self.link_file(&group, &file)?;
         }
         Ok(())
     }
-    fn link_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+    fn link_file(&mut self, group: &Group, file: &PathBuf) -> Result<()> {
         let src = group.abs_path().join(file);
         let dest = if file.is_relative() {
             self.home.join(file)
         }
         else {
-            file.clone()
+            return Err("absolute paths are not supported yet")?
+            // file.clone()
         };
         if dest.exists() {
             let destd = dest.display();
@@ -190,7 +204,7 @@ impl Confine {
                 }
             }
             else {
-                warn!("creating backup for {} before erasing", destd);
+                warn!("creating backup for {} before overwriting", destd);
                 self.backup_file(&group, &dest)?;
                 if ! self.dry {
                     warn!("rm -rf '{}'", destd);
@@ -229,7 +243,12 @@ impl Confine {
             warn!("dry: mkdir -p '{}'", backup_dest.display());
         }
         trace!("backup {:?} to {:?}", path, backup_dest);
-        fs_extra::copy_items(&vec![path], backup_dest, &fs_extra::dir::CopyOptions::new())?;
+        if ! self.dry {
+            fs_extra::copy_items(&vec![path], backup_dest, &fs_extra::dir::CopyOptions::new())?;
+        }
+        else {
+            warn!("dry: cp -r {} {}", path.display(), backup_dest.display())
+        }
 
         Ok(())
     }
