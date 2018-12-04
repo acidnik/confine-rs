@@ -1,1 +1,2 @@
 ["common/.gitconfig"]
+MY_VAR = "1"

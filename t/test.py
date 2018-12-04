@@ -28,14 +28,13 @@ home_test=Path(test_root, 'home_test')
 common = Path(test_root, 'common')
 meta = Path(common, 'meta.txt')
 backup = Path(test_root, 'backup')
+tune = Path(test_root, 'tune')
 
 def setup():
-    if home_test.exists():
-        rmtree(home_test)
-    if common.exists():
-        rmtree(common)
-    if backup.exists():
-        rmtree(backup)
+    for d in [home_test, common, backup]:
+        if d.exists():
+            rmtree(d)
+
     copytree(Path(test_root, 'home'), home_test)
     common.mkdir()
 
@@ -185,6 +184,30 @@ def test_ln_backup_dir():
     assert f.exists()
 
 
+####### templates
 
+def test_templates():
+    setup()
+
+    confine('mv', 'common', '.gitconfig')
+
+    with pytest.raises(Exception):
+        # is template
+        confine('ln', 'common')
+
+    with pytest.raises(Exception):
+        # variable missing
+        confine('ln', 'common', '-t', 'test')
+
+    confine('ln', 'common', '-t', 'test2')
+
+    gitconfig = Path(home_test, '.gitconfig')
+
+    with open(gitconfig) as f:
+        lines = [line.strip() for line in f]
+        assert lines[0] == str(home_test)
+        assert lines[1] == '1'
+
+    # assert 0
 
 

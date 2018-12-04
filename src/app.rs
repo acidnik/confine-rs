@@ -116,8 +116,8 @@ impl Confine {
 
         Self {
             dry: dry,
+            templates: Templates::new(root.clone(), home.clone()),
             home: home,
-            templates: Templates::new(root.clone()),
             root: root,
             groups: HashMap::new(),
             template: None,
@@ -164,21 +164,25 @@ impl Confine {
             if ! meta.check(&file) {
                 Err(format!("file {} not in meta.txt", file.display()))?
             }
-            let template_name = group.dir.join(&file);
-            if self.templates.needs_template(&template_name) {
-                if self.template.is_none() {
-                    Err(format!("file {}: template required", template_name.display()))?
-                }
-                else {
-                    file = self.templates.process(&template_name, &file, &self.template.clone().unwrap())?;
-                }
-            }
             self.link_file(&group, &file)?;
         }
         Ok(())
     }
     fn link_file(&mut self, group: &Group, file: &PathBuf) -> Result<()> {
-        let src = group.abs_path().join(file);
+        let template_name = group.dir.join(&file);
+        
+        let src = if self.templates.needs_template(&template_name) {
+            if self.template.is_none() {
+                Err(format!("file {}: template required", template_name.display()))?
+            }
+            else {
+                self.templates.process(&template_name, &group.abs_path().join(file), &self.template.clone().unwrap())?
+            }
+        }
+        else {
+            group.abs_path().join(file)
+        };
+        
         let dest = if file.is_relative() {
             self.home.join(file)
         }
