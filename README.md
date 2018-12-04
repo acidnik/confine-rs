@@ -10,26 +10,26 @@ First step. Move your current config files under `confine`'s control
 
 ```
 # initialize config storage
-[~]$ mkdir config && cd $_ && git init . && git commit -m 'init'
+[~]$ mkdir dotfiles && cd $_ && git init . && git commit -m 'init'
 
 # create group common
-[config]$ mkdir common
+[dotfiles]$ mkdir common
 
 # move files into group common
 # path could be absolute (but still belong to $HOME) or relative, assuming it's in ~
-# this command will move files to common/ and create symlinks back to where they were
-[config]$ confine move common .bashrc ~/.vimrc ~/.vim .config/git
+# this command will move files to common/ and create symlinks back to where the original files were
+[dotfiles]$ confine move common .bashrc ~/.vimrc ~/.vim .config/git
 
 # check
 ls -lF ~/.bashrc
-/home/user/.bashrc@ -> /home/user/config/common/.bashrc
+/home/user/.bashrc@ -> /home/user/dotfiles/common/.bashrc
 
 ```
 
 Second step. Use your config files on another machine
 
 ```
-[~]$ git clone ssh://.../git/config && cd config
+[~]$ git clone ssh://.../git/dotfiles && cd dotfiles
 
 # create links for all files in group common
 confine link common
@@ -38,7 +38,7 @@ confine link common
 confine link work .bashrc.work .config/my_app_setting
 ```
 
-If there's already a file where link should be created, existing file is moved to `config/backup/$hostname/`
+If there's already a file where link should be created, existing file is moved to `dotfiles/backup/$hostname/`
 
 Options
 -------
@@ -47,7 +47,6 @@ Options
 Common options:
 
     -q --quiet  -- be quiet
-    --trace     -- be extra verbose
     -r --root <dir> -- config dir, default '.'
 
 Subcommands:
@@ -79,12 +78,14 @@ cat $RIPGREP_CONFIG_PATH
 ```
 This format does not support expanding of ~ or $HOME
 So, I have to fix this on my other machines, where home dir is different.
+
+
 Another expample is gitconfig. While there's still means to workaround this,
 it would be so much easier, if you could just write
 ```
 [user]
-    name = {GIT_NAME}
-    email = {GIT_EMAIL}
+    name = {{GIT_NAME}}
+    email = {{GIT_EMAIL}}
 ```
 
 Sure, you could just create two groups: home and work, and create links from appropriate group.
@@ -94,10 +95,10 @@ So, the solution is templates.
 
 First, you create file under tune/templates:
 ```
-cat tune/templates/work.toml
+cd ~/dotfiles && cat tune/templates/work.toml
 [.gitconfig]
-GIT\_NAME = Nikita Bilous
-GIT\_EMAIL = nsbilous@example.com
+GIT_NAME = Nikita Bilous
+GIT_EMAIL = nsbilous@example.com
 
 ```
 
@@ -118,11 +119,14 @@ creating file tune/templates/common/.gitconfig
 From now on, you either have to provide template or skip templated files
 
 -t accepts file name under tune/templates with or without extension or path to file
--t work | -t work.toml | -t tune/templates/work.toml | -t /tmp/test.toml
 
+```
+-t work | -t work.toml | -t tune/templates/work.toml | -t /tmp/test.toml
+```
 
 Running commands after links
 ----------------------------
+# this is TODO
 In some cases, you need to run some commands after a link is created:
 ```
 confine ln common .vimrc .vim

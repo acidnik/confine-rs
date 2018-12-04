@@ -200,6 +200,8 @@ def test_templates():
         confine('ln', 'common', '-t', 'test')
 
     confine('ln', 'common', '-t', 'test2')
+    confine('ln', 'common', '-t', 'test2.toml')
+    confine('ln', 'common', '-t', 'tune/templates/test2.toml')
 
     gitconfig = Path(home_test, '.gitconfig')
 

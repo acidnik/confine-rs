@@ -83,18 +83,24 @@ impl Templates {
         else {
             control.to_string() + ".toml"
         };
+        let control = if let Some(idx) = control.rfind('/') {
+            control[(idx+1)..].to_string()
+        }
+        else {
+            control
+        };
         let control_file = self.control_files.keys().find(|k| k.file_name().unwrap() == &control[..]);
         if control_file.is_none() {
             return Err(format!("template description not found: {}", control))?
         }
-        let control_file = control_file.unwrap();
+        let control_file = control_file.unwrap().canonicalize()?;
         
         debug!("process template config {} with variables from {}", file.display(), control_file.display());
 
         trace!("read {:?}", file);
         let file_str = fs::read_to_string(&file)?;
         let mut context = tera::Context::new();
-        let vars = self.vars.get(control_file);
+        let vars = self.vars.get(&control_file);
         if vars.is_none() {
             return Err(format!("no variables found for file {} in template descripiton {}", file.display(), control_file.display()))?;
         }
