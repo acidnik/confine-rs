@@ -12,9 +12,6 @@ First step. Move your current config files under `confine`'s control
 # initialize config storage
 [~]$ mkdir dotfiles && cd $_ && git init . && git commit -m 'init'
 
-# create group common
-[dotfiles]$ mkdir common
-
 # move files into group common
 # path could be absolute (but still belong to $HOME) or relative, assuming it's in ~
 # this command will move files to common/ and create symlinks back to where the original files were
@@ -25,6 +22,10 @@ ls -lF ~/.bashrc
 /home/user/.bashrc@ -> /home/user/dotfiles/common/.bashrc
 
 ```
+
+Special file `common/meta.txt` keeps track of added files 
+
+
 
 Second step. Use your config files on another machine
 
@@ -96,7 +97,7 @@ So, the solution is templates.
 First, you create file under tune/templates:
 ```
 cd ~/dotfiles && cat tune/templates/work.toml
-[.gitconfig]
+["common/.gitconfig"]
 GIT_NAME = Nikita Bilous
 GIT_EMAIL = nsbilous@example.com
 
@@ -124,8 +125,27 @@ From now on, you either have to provide template or skip templated files
 -t work | -t work.toml | -t tune/templates/work.toml | -t /tmp/test.toml
 ```
 
+The special variable HOME is created for each entry, if it's not set:
+```
+["common/test_file"]
+
+["common/test2"]
+HOME="/tmp"
+# for common/test_file: HOME=$HOME
+# for common/test2: HOME="/tmp"
+```
+
+Format for template descriptions:
+```
+["group/path/to/file"]
+VAR = "value"
+VAR2 = "value2"
+```
+where `group` is group, and `path/to/file` must be present in group/meta.txt
+
 Running commands after links
 ----------------------------
+
 # this is TODO
 In some cases, you need to run some commands after a link is created:
 ```
@@ -144,3 +164,41 @@ cat tune/postcreate.toml
  - cd ~/.vim && git submodule update --init
  - echo 'Postupdate done'
 ```
+
+Why the meta.txt?
+-----------------
+
+Let's say I have the following config files (and dirs):
+```
+~/.config/app_config_dir/ # whole dir
+~/.mplayer/ # whole dir
+~/.ipython/profile_default/ipython_config.py # only one file
+```
+
+What would happen, if I don't track their origins:
+```
+.dotfiles/common/.config/app_config_dir
+.dotfiles/common/.mplayer/
+.dotfiles/common/.ipython/profile_default/ipython_config.py
+```
+
+Link for .mplayer goes straight to ~
+
+Link for .common/app_config_dir shoult go to ~/.config
+
+Link for ipython_config should go to ~/.ipython/profile/default
+
+There's no way of knowing for sure, at which level we should create link.
+
+So the meta.txt helps us:
+```
+# cat common/meta.txt
+.config/app_config_dir
+.mplayer
+.ipython/profile_default/ipython_config.py
+```
+
+Now it's easy:  
+common/.config/app_config_dir/: create link in ~/.config/  
+.mplayer: create link in ~/  
+.ipython/profile_default/ipython_config.py: create link in .ipython/profile_default/
