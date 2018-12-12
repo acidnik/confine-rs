@@ -3,6 +3,6 @@
 Cargo.lock
 **/__pycache__
 **/venv
-t/home_test
-t/common
-t/backup
+test/home_test
+test/common
+test/backup

@@ -37,6 +37,7 @@ def setup():
 
     copytree(Path(test_root, 'home'), home_test)
     common.mkdir()
+    
 
 confine_exe = Path(test_root, '../target/debug/confine').absolute()
 
@@ -116,6 +117,8 @@ def test_ln_all_group():
 
     m = get_meta()
 
+    assert len(m) == 3
+
     for f in m:
         cf = Path(common, f)
         hf = Path(home_test, f)
@@ -133,6 +136,15 @@ def test_ln_not_in_meta():
 
     with pytest.raises(subprocess.CalledProcessError):
         confine('ln', 'common', '.config')
+
+
+def test_ln_nested_dir():
+    setup()
+    confine('mv', 'common', '.config/test_dir/test_file')
+    rmtree(Path(home_test, '.config/test_dir'))
+    confine('ln', 'common', '.config/test_dir/test_file')
+
+    assert Path(home_test, '.config/test_dir/test_file').is_symlink()
 
 
 def test_ln_backup():
@@ -210,6 +222,5 @@ def test_templates():
         assert lines[0] == str(home_test)
         assert lines[1] == '1'
 
-    # assert 0
 
 

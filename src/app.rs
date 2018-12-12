@@ -224,6 +224,16 @@ impl Confine {
                 }
             }
         }
+        let link_dir = dest.parent().unwrap();
+        if ! link_dir.exists() {
+            if ! self.dry {
+                fs::create_dir_all(link_dir)?;
+            }
+            else {
+                warn!("dry: mkdir -p '{}'", link_dir.display())
+            }
+        }
+
         trace!("link {:?} -> {:?}", src, dest);
         if ! self.dry {
             std::os::unix::fs::symlink(&src, &dest)?;
