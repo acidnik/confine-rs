@@ -24,7 +24,7 @@ TODO:
 test_root = Path(__file__).absolute().parent
 os.chdir(test_root)
 
-home_test=Path(test_root, 'home_test')
+home_test = Path(test_root, 'home_test')
 common = Path(test_root, 'common')
 meta = Path(common, 'meta.txt')
 backup = Path(test_root, 'backup')
@@ -223,4 +223,25 @@ def test_templates():
         assert lines[1] == '1'
 
 
+
+
+#########
+
+def test_undo():
+    setup()
+    
+    test_dir = Path(home_test, '.config/test_dir')
+    test_file = Path(home_test, '.gitconfig')
+
+    confine('mv', 'common', '.gitconfig')
+    confine('mv', 'common', '.config/test_dir')
+
+    assert test_dir.is_symlink()
+    assert test_file.is_symlink()
+    confine('undo', 'common', '.config/test_dir')
+    assert not test_dir.is_symlink()
+    assert test_file.is_symlink()
+    
+    confine('undo', 'common')
+    assert not test_file.is_symlink()
 

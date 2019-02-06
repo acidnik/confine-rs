@@ -9,6 +9,7 @@ use std::fs;
 use std::error;
 
 use templates::Templates;
+use file_utils::FileUtils;
 
 struct Meta {
     meta_file: PathBuf,
@@ -102,6 +103,7 @@ pub struct Confine {
     templates: Templates,
     groups: HashMap<String, Group>,
     template: Option<String>,
+    fs: FileUtils,
 }
 
 impl Confine {
@@ -121,6 +123,7 @@ impl Confine {
             root: root,
             groups: HashMap::new(),
             template: None,
+            fs: FileUtils::new(dry),
         }
     }
 
@@ -144,6 +147,10 @@ impl Confine {
         else if let Some(matches) = matches.subcommand_matches("move") {
            let (files, group) = self.get_files_from_args(&matches)?;
            self.move_files(group, files)
+        }
+        else if let Some(matches) = matches.subcommand_matches("undo") {
+            let (files, group) = self.get_files_from_args(&matches)?;
+            self.undo_files(group, files)
         }
         else {
            return Err("Subcommand missing, see --help")?
@@ -200,47 +207,20 @@ impl Confine {
                     return Ok(());
                 }
                 warn!("link: destination file {} is symlink, removing", destd);
-                if ! self.dry {
-                    fs::remove_file(&dest)?
-                }
-                else {
-                    warn!("dry: rm '{}'", destd);
-                }
+                self.fs.unlink(&dest)?;
             }
             else {
                 warn!("creating backup for {} before overwriting", destd);
                 self.backup_file(&group, &dest)?;
-                if ! self.dry {
-                    warn!("rm -rf '{}'", destd);
-                    if dest.is_dir() {
-                        fs::remove_dir_all(&dest)?
-                    }
-                    else {
-                        fs::remove_file(&dest)?
-                    }
-                }
-                else {
-                    warn!("dry: rm -rf '{}'", destd);
-                }
+                self.fs.unlink(&dest)?;
             }
         }
         let link_dir = dest.parent().unwrap();
         if ! link_dir.exists() {
-            if ! self.dry {
-                fs::create_dir_all(link_dir)?;
-            }
-            else {
-                warn!("dry: mkdir -p '{}'", link_dir.display())
-            }
+            self.fs.mkpath(&link_dir.to_owned())?
         }
 
-        trace!("link {:?} -> {:?}", src, dest);
-        if ! self.dry {
-            std::os::unix::fs::symlink(&src, &dest)?;
-        }
-        else {
-            warn!("dry: ln -s '{}' '{}'", src.display(), dest.display());
-        }
+        self.fs.symlink(&src, &dest)?;
 
         Ok(())
     }
@@ -250,19 +230,12 @@ impl Confine {
         let rel_path = path.strip_prefix(self.home.clone())?.to_owned();
         let hostname = hostname::get_hostname().unwrap();
         let backup_dest = group.root.join("backup").join(&hostname).join(&rel_path).parent().unwrap().to_owned();
-        if ! self.dry {
-            fs::create_dir_all(&backup_dest)?
-        }
-        else {
-            warn!("dry: mkdir -p '{}'", backup_dest.display());
-        }
+        
+        self.fs.mkpath(&backup_dest)?;
+        
         trace!("backup {:?} to {:?}", path, backup_dest);
-        if ! self.dry {
-            fs_extra::copy_items(&vec![path], backup_dest, &fs_extra::dir::CopyOptions::new())?;
-        }
-        else {
-            warn!("dry: cp -r {} {}", path.display(), backup_dest.display())
-        }
+
+        self.fs.copy(&path, &backup_dest)?;
 
         Ok(())
     }
@@ -317,25 +290,61 @@ impl Confine {
     }
 
     fn do_move_file(&self, from: &PathBuf, to: &PathBuf) -> Result<()> {
-        let dest_dir = to.parent().unwrap();
+        let dest_dir = to.parent().unwrap().to_owned();
         trace!("dest dir = {:?}", dest_dir);
-        if ! self.dry {
-            fs::create_dir_all(dest_dir)?;
+        self.fs.mkpath(&dest_dir)?;
+
+        self.fs.copy(&from, &dest_dir)?;
+        self.fs.unlink(&from)?;
+        self.fs.symlink(&to, &from)?;
+        
+        Ok(())
+    }
+
+    fn undo_files(&self, group: Group, files: Vec<PathBuf>) -> Result<()> {
+        let meta = Meta::new(&group)?;
+        let files = if files.len() > 0 {
+            files
         }
         else {
-            warn!("dry: mkdir -p '{}'", dest_dir.display());
+            meta.list()?.into_iter().map(|f| PathBuf::from(f)).collect()
+        };
+        for file in files {
+            let mut file = file;
+            debug!("undo link [{}] {}", group, file.display());
+            if ! meta.check(&file) {
+                Err(format!("file {} not in meta.txt", file.display()))?
+            }
+            self.undo_link_file(&group, &file)?;
         }
-        if ! self.dry {
-            let from_vec = vec![from];
-            fs_extra::copy_items(&from_vec, dest_dir, &fs_extra::dir::CopyOptions::new())?;
-            fs_extra::remove_items(&from_vec)?;
-            std::os::unix::fs::symlink(&to, &from)?;
+        Ok(())
+    }
+    
+    fn undo_link_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+        // before: ~/.foo.rc -> ~/config/grp/.foo.rc
+        // after: ~/.foo.rc (copied from ~/config/grp/.foo.rc)
+
+        let link_file = if file.is_relative() {
+            self.home.join(file)
         }
         else {
-            warn!("dry: cp -r '{}' '{}'", from.display(), dest_dir.display());
-            warn!("dry: rm -rf '{}'", from.display());
-            warn!("dry: ln -s '{}' '{}'", to.display(), from.display());
+            return Err("absolute paths are not supported yet")?
+            // file.clone()
+        };
+        if ! link_file.exists() {
+            // TODO just warning?
+            return Err(format!("{} does not exists, can not undo", link_file.display()))?
         }
+        if ! fs::symlink_metadata(&link_file)?.file_type().is_symlink() {
+            warn!("{} is not a symlink, nothing to undo", link_file.display());
+            return Ok(());
+        }
+
+        let real_file = link_file.canonicalize()?;
+
+        self.fs.unlink(&link_file)?;
+        self.fs.copy(&real_file, &link_file)?;
+        
         Ok(())
     }
 

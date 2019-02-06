@@ -12,6 +12,7 @@ use std::error;
 
 mod app;
 mod templates;
+mod file_utils;
 
 fn main() -> Result<(), Box<error::Error>> {
     let matches = App::new("confine")
@@ -28,6 +29,7 @@ fn main() -> Result<(), Box<error::Error>> {
              .help("show trace info")
         )
         .arg(Arg::with_name("dry")
+             .long("dry")
              .short("n")
              .help("dry run")
         )
@@ -70,6 +72,17 @@ fn main() -> Result<(), Box<error::Error>> {
             )
             .arg(Arg::with_name("files")
                  .multiple(true)
+            )
+        )
+        .subcommand(SubCommand::with_name("undo")
+            .about("undo symlinking, restore original files")
+            .arg(Arg::with_name("group")
+                 .index(1)
+                 .required(true)
+                 .help("group")
+            )
+            .arg(Arg::with_name("files")
+                .multiple(true)
             )
         )
         .get_matches();
