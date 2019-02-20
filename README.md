@@ -1,204 +1,114 @@
 Confine - config manager
 ========================
 
-USAGE
+OVERVIEW
 --------
-Config files are divided into groups. When you move a file under confine's management, you assign
-this file to a group.
-
-First step. Move your current config files under `confine`'s control
-
 ```
-# initialize config storage
-[~]$ mkdir dotfiles && cd $_ && git init . && git commit -m 'init'
+USAGE:
+    confine [FLAGS] [OPTIONS] [SUBCOMMAND]
 
-# move files into group common
-# path could be absolute (but still belong to $HOME) or relative, assuming it's in ~
-# this command will move files to common/ and create symlinks back to where the original files were
-[dotfiles]$ confine move common .bashrc ~/.vimrc ~/.vim .config/git
+FLAGS:
+    -n, --dry        dry run
+    -h, --help       Prints help information
+    -q               be quiet
+    -V, --version    Prints version information
 
-# check
-ls -lF ~/.bashrc
-/home/user/.bashrc@ -> /home/user/dotfiles/common/.bashrc
+OPTIONS:
+    -r <root>        config storage root [default: .]
 
-```
-
-Special file `common/meta.txt` keeps track of added files 
-
-
-
-Second step. Use your config files on another machine
-
-```
-[~]$ git clone ssh://.../git/dotfiles && cd dotfiles
-
-# create links for all files in group common
-confine link common
-
-# create links only for some files (in group work)
-confine link work .bashrc.work .config/my_app_setting
+SUBCOMMANDS:
+    help    Prints this message or the help of the given subcommand(s)
+    link    create symlink
+    move    move file under config control
+    undo    undo symlinking, restore original files
 ```
 
-If there's already a file where link should be created, existing file is moved to `dotfiles/backup/$hostname/`
-
-Options
--------
-
+USAGE
+-----
+To start, create a directory where your dotfiles will be stored
 ```
-Common options:
+$ cd && mkdir confine && cd confine
+```
 
-    -q --quiet  -- be quiet
-    -r --root <dir> -- config dir, default '.'
+Then, create directory for group. Each config file will belong to a certain group
+```
+$ mkdir common
+```
 
-Subcommands:
-    move | mv <group> [files]
-    link | ln <group> [files]
+Now you can move some existing files to that group
+```
+$ confine move common ~/.bashrc ~/.vimrc ~/.vim
+
+$ ls -ld ~/.bashrc ~/.vim ~/.vimrc
+lrwxrwxrwx  /home/user/.bashrc -> /home/user/confine/common/.bashrc
+lrwxrwxrwx  /home/user/.vim -> /home/user/confine/common/.vim/
+lrwxrwxrwx  /home/user/.vimrc -> /home/user/confine/common/.vimrc
 
 ```
 
-Tips and tricks
----------------
-
-Group and file name could be combined with `/`:
+VCS is not handled by confine, so it's up to you:
 ```
-confine ln common/.bashrc # same as confine ln common .bashrc
+$ git init . && git add . && git commit -m 'initial'
+# add remote and push
 ```
 
-Advanced usage
-==============
+Next thing you probably want to do is restore you configuration on another machine:
+```
+# git clone ...; cd confine
 
-Templates
+# create links for all files in common
+$ confine link common
+
+# or only some files
+$ confine link common .bashrc .tmux.conf
+
+# the same but utilizing the power of tab-completion
+$ confine link common/.bashrc common/.tmux.conf
+```
+
+If file in ~/ exists, it will be moved to backup/{hostname}/.bashrc before overwriting.
+
+Next thing you probably don't want to do (but anyway there's an option to do so) is to undo link and replace it with solid file
+```
+confine undo common .bashrc
+ls -l ~/.bashrc
+-rw-r--r--  /home/user/.bashrc
+```
+
+TEMPLATES
 ---------
-
-Some config files are not supporting includes or other types of customization.
-For expample, it's hard to set ripgrep ignore file agnostic to user name:
-
+Some config files, such as .ripgreprc, don't allow using env variables or shell globbing, so there's no easy way
+to set path to ignore file:
 ```
-cat $RIPGREP_CONFIG_PATH
---ignore-file = /home/nik/.config/ripgrep/ignore
-```
-This format does not support expanding of ~ or $HOME
-So, I have to fix this on my other machines, where home dir is different.
-
-
-Another expample is gitconfig. While there's still means to workaround this,
-it would be so much easier, if you could just write
-```
-[user]
-    name = {{GIT_NAME}}
-    email = {{GIT_EMAIL}}
+cat ~/.config/ripgrep/config 
+--ignore-file=/Users/nikita/.config/ripgrep/ignore
 ```
 
-Sure, you could just create two groups: home and work, and create links from appropriate group.
-But then, when you come up with great idea for config, you have to fix it in all files. Ain't nobody got time for this!
+Another example is .gitconfig. Some people want different settings for name and e-mail at home and work machines. Although there's a way to circumvent this problem with some git-config-foo, another way would be using a templates.
 
-So, the solution is templates.
+Templates are toml files that stored in directory `tune/templates`
 
-First, you create file under tune/templates:
 ```
-cd ~/dotfiles && cat tune/templates/work.toml
+$ cd confine
+cat common/.config/ripgrep/config
+--ignore-file={{HOME}}/.config/ripgrep/ignore
+
+$ cat tune/templates/home.toml
 ["common/.gitconfig"]
-GIT_NAME = Nikita Bilous
-GIT_EMAIL = nsbilous@example.com
+GIT_USER="Nikita Bilous"
+GIT_EMAIL="nikita@bilous.me"
 
+["common/.config/ripgrep/config"]
+```
+Note that the section for ripgrep is empty. It's there to let confine know that the file should be processed. The only variable we are going to substitute is `{{HOME}}` which is defined in runtime by confine itself.
+
+Now we can create links:
+```
+confine ln common/.config/ripgrep/config -t home
 ```
 
-What happens when you try to create link now? Let's find out:
+Templates are processed using [[tera]] engine and stored in `tune/templates/processed`
 ```
-confine ln common/.gitconfig
-Error: common/.gitconfig : template required!
-
-# skip files that require template
-confine ln --skip common
-Warning: common/.gitconfig template required, skipping
-
-confine ln -t work common/.gitconfig
-creating file tune/templates/common/.gitconfig
-
+$ ls -l ~/.config/ripgrep/
+lrwxr-xr-x   config@ -> /Users/user/confne/tune/templates/processed/common/.config/ripgrep/config
 ```
-
-From now on, you either have to provide template or skip templated files
-
--t accepts file name under tune/templates with or without extension or path to file
-
-```
--t work | -t work.toml | -t tune/templates/work.toml | -t /tmp/test.toml
-```
-
-The special variable HOME is created for each entry, if it's not set:
-```
-["common/test_file"]
-
-["common/test2"]
-HOME="/tmp"
-# for common/test_file: HOME=$HOME
-# for common/test2: HOME="/tmp"
-```
-
-Format for template descriptions:
-```
-["group/path/to/file"]
-VAR = "value"
-VAR2 = "value2"
-```
-where `group` is group, and `path/to/file` must be present in group/meta.txt
-
-Running commands after links
-----------------------------
-
-# this is TODO
-In some cases, you need to run some commands after a link is created:
-```
-confine ln common .vimrc .vim
-
-# init vundle repo
-cd ~/.vim && git submodules update --init
-```
-
-This is getting old pretty quick.
-
-The solution is postcreate:
-```
-cat tune/postcreate.toml
-[common/.vim]
- - cd ~/.vim && git submodule update --init
- - echo 'Postupdate done'
-```
-
-Why the meta.txt?
------------------
-
-Let's say I have the following config files (and dirs):
-```
-~/.config/app_config_dir/ # whole dir
-~/.mplayer/ # whole dir
-~/.ipython/profile_default/ipython_config.py # only one file
-```
-
-What would happen, if I don't track their origins:
-```
-.dotfiles/common/.config/app_config_dir
-.dotfiles/common/.mplayer/
-.dotfiles/common/.ipython/profile_default/ipython_config.py
-```
-
-Link for .mplayer goes straight to ~
-
-Link for .common/app_config_dir shoult go to ~/.config
-
-Link for ipython_config should go to ~/.ipython/profile/default
-
-There's no way of knowing for sure, at which level we should create link.
-
-So the meta.txt helps us:
-```
-# cat common/meta.txt
-.config/app_config_dir
-.mplayer
-.ipython/profile_default/ipython_config.py
-```
-
-Now it's easy:  
-common/.config/app_config_dir/: create link in ~/.config/  
-.mplayer: create link in ~/  
-.ipython/profile_default/ipython_config.py: create link in .ipython/profile_default/
