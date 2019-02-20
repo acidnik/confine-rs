@@ -6,3 +6,4 @@ Cargo.lock
 test/home_test
 test/common
 test/backup
+test/tune/templates/processed

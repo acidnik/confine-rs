@@ -4,7 +4,6 @@ import pytest
 from pathlib import Path
 import os, sys
 from shutil import copytree, rmtree
-from getkey import getkey
 import subprocess
 import shlex
 
@@ -245,3 +244,67 @@ def test_undo():
     confine('undo', 'common')
     assert not test_file.is_symlink()
 
+
+#############
+
+def test_delete1():
+    setup();
+
+    # 1) move and delete
+    test_file = Path(home_test, '.gitconfig')
+    src_file = Path(common, '.gitconfig')
+
+    confine('mv', 'common', '.gitconfig')
+    confine('rm', 'common', '.gitconfig')
+
+    assert not test_file.exists()
+    assert not src_file.exists()
+    assert '.gitconfig' not in get_meta()
+
+
+def test_delete2():
+    setup();
+
+    # 2) move, delete link and delete
+    test_file = Path(home_test, '.gitconfig')
+    src_file = Path(common, '.gitconfig')
+
+    confine('mv', 'common', '.gitconfig')
+    test_file.unlink()
+
+    confine('rm', 'common', '.gitconfig')
+
+    assert not src_file.exists()
+    assert '.gitconfig' not in get_meta()
+
+
+def test_delete3():
+    setup();
+
+    # 3) move, delete src file (leave broken link behind)
+    test_file = Path(home_test, '.gitconfig')
+    src_file = Path(common, '.gitconfig')
+
+    confine('mv', 'common', '.gitconfig')
+    src_file.unlink()
+
+    confine('rm', 'common', '.gitconfig')
+
+    assert not test_file.exists()
+    assert '.gitconfig' not in get_meta()
+
+
+def test_delete4():
+    setup();
+
+    # 4) move, delete both src and link, leave only meta entry
+    test_file = Path(home_test, '.gitconfig')
+    src_file = Path(common, '.gitconfig')
+
+    confine('mv', 'common', '.gitconfig')
+    src_file.unlink()
+    test_file.unlink()
+
+    confine('rm', 'common', '.gitconfig')
+
+    assert '.gitconfig' not in get_meta()

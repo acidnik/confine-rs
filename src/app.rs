@@ -12,6 +12,7 @@ use templates::Templates;
 use file_utils::FileUtils;
 
 struct Meta {
+    dry: bool,
     meta_file: PathBuf,
     entries: Vec<String>,
 }
@@ -28,9 +29,10 @@ impl Meta {
         else {
             Vec::new()
         };
-        Ok(Self {meta_file, entries})
+        let dry = group.dry;
+        Ok(Self {dry, meta_file, entries})
     }
-    fn add(&self, entry: &PathBuf) -> Result<()> {
+    fn add(&mut self, entry: &PathBuf) -> Result<()> {
         let meta_file = &self.meta_file;
         trace!("{:?} add {:?}", meta_file, entry);
         let entry_str = entry.to_str().unwrap().to_string();
@@ -48,8 +50,24 @@ impl Meta {
             trace!("no new entries for meta");
             return Ok(());
         }
-        trace!("new meta: {:?}", lines);
-        fs::write(&meta_file, lines.join("\n") + "\n")?;
+        self.entries = lines;
+        self.save()?;
+
+        Ok(())
+    }
+    fn delete(&mut self, entry: &PathBuf) -> Result<()> {
+        let entries = self.entries.clone().into_iter().filter(|s| PathBuf::from(s) != *entry).collect::<Vec<_>>();
+        self.entries = entries;
+        self.save()?;
+
+        Ok(())
+    }
+    fn save(&self) -> Result<()> {
+        trace!("new meta: {:?}", self.entries);
+        if self.dry {
+            return Ok(())
+        }
+        fs::write(&self.meta_file, self.entries.join("\n") + "\n")?;
 
         Ok(())
     }
@@ -64,22 +82,23 @@ impl Meta {
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct Group {
+    dry: bool,
     root: PathBuf,
     dir: PathBuf,
 }
 
 impl Group {
-    fn new(root: PathBuf, path: &str) -> Result<Self> {
+    fn new(dry: bool, root: PathBuf, path: &str) -> Result<Self> {
         if let Some(_) = path.find('/') {
             return Err("Invalid group name")?;
         }
         if path == "backup" {
             return Err("Forbidden group name")?;
         }
-        return Ok(Group { dir: PathBuf::from(path), root: root, });
+        return Ok(Group { dry: dry, dir: PathBuf::from(path), root: root, });
     }
     fn add_meta(&self, entry: &PathBuf) -> Result<()> {
-        let meta = Meta::new(&self)?;
+        let mut meta = Meta::new(&self)?;
         meta.add(entry)
     }
     fn abs_path(&self) -> PathBuf {
@@ -103,6 +122,7 @@ pub struct Confine {
     templates: Templates,
     groups: HashMap<String, Group>,
     template: Option<String>,
+    del_link_only: bool,
     fs: FileUtils,
 }
 
@@ -123,6 +143,7 @@ impl Confine {
             root: root,
             groups: HashMap::new(),
             template: None,
+            del_link_only: false,
             fs: FileUtils::new(dry),
         }
     }
@@ -152,6 +173,11 @@ impl Confine {
             let (files, group) = self.get_files_from_args(&matches)?;
             self.undo_files(group, files)
         }
+        else if let Some(matches) = matches.subcommand_matches("delete") {
+            let (files, group) = self.get_files_from_args(&matches)?;
+            self.del_link_only = matches.is_present("link");
+            self.delete_files(group, files)
+        }
         else {
            return Err("Subcommand missing, see --help")?
         }
@@ -180,6 +206,7 @@ impl Confine {
         
         let src = if self.templates.needs_template(&template_name) {
             if self.template.is_none() {
+                // self.template is arg to -t <template>
                 Err(format!("file {}: template required", template_name.display()))?
             }
             else {
@@ -200,7 +227,7 @@ impl Confine {
         if dest.exists() {
             let destd = dest.display();
             warn!("link: destination file {} exists", destd);
-            if fs::symlink_metadata(&dest)?.file_type().is_symlink() {
+            if self.fs.is_symlink(&dest)? {
                 let dest_canon = dest.canonicalize()?;
                 if dest_canon == src {
                     warn!("{} is already a link to {}", src.display(), destd);
@@ -218,6 +245,11 @@ impl Confine {
         let link_dir = dest.parent().unwrap();
         if ! link_dir.exists() {
             self.fs.mkpath(&link_dir.to_owned())?
+        }
+
+        if ! src.exists() {
+            error!("file {} not found! Please remove it with confine delete", src.display());
+            Err("Source file not found")?
         }
 
         self.fs.symlink(&src, &dest)?;
@@ -320,7 +352,7 @@ impl Confine {
         Ok(())
     }
     
-    fn undo_link_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+    fn undo_link_file(&self, _group: &Group, file: &PathBuf) -> Result<()> {
         // before: ~/.foo.rc -> ~/config/grp/.foo.rc
         // after: ~/.foo.rc (copied from ~/config/grp/.foo.rc)
 
@@ -335,7 +367,7 @@ impl Confine {
             // TODO just warning?
             return Err(format!("{} does not exists, can not undo", link_file.display()))?
         }
-        if ! fs::symlink_metadata(&link_file)?.file_type().is_symlink() {
+        if ! self.fs.is_symlink(&link_file)? {
             warn!("{} is not a symlink, nothing to undo", link_file.display());
             return Ok(());
         }
@@ -345,6 +377,62 @@ impl Confine {
         self.fs.unlink(&link_file)?;
         self.fs.copy(&real_file, &link_file)?;
         
+        Ok(())
+    }
+    
+    fn delete_files(&self, group: Group, files: Vec<PathBuf>) -> Result<()> {
+        if files.len() == 0 {
+            warn!("No files specified. Not deleting whole group. Please do `confine undo` and remove whole group directory by hand if you don't need it anymore");
+            return Ok(());
+        }
+        for file in files {
+            debug!("delete {}", file.display());
+            self.delete_file(&group, &file)?;
+        }
+        Ok(())
+    }
+    
+    fn delete_file(&self, group: &Group, file: &PathBuf) -> Result<()> {
+        // 1. delete link
+        // 2. delete file
+        //   2.1 delete processed template (TODO)
+        // 3. delete from meta
+        let mut meta = Meta::new(&group)?;
+        if ! meta.check(&file) {
+            return Err(format!("{} is not in meta.txt", file.display()))?
+        }
+        let link_file = if file.is_relative() {
+            self.home.join(file)
+        }
+        else {
+            return Err("absolute paths are not supported yet")?
+        };
+
+        if link_file.exists() {
+            if ! self.fs.is_symlink(&link_file)? {
+                warn!("file {} is not a symlink, not deleting", link_file.display());
+            }
+            else {
+                self.fs.unlink(&link_file)?
+            }
+        }
+        
+        if self.del_link_only {
+            return Ok(())
+        }
+        
+        let src = group.abs_path().join(file);
+        if ! src.exists() {
+            debug!("{} already deleted, ok", src.display());
+        }
+        else {
+            self.fs.unlink(&src)?
+        }
+
+        if meta.check(&file) {
+            meta.delete(&file)?
+        }
+
         Ok(())
     }
 
@@ -379,7 +467,7 @@ impl Confine {
         }
         else {
             let root = self.root.clone();
-            groups.insert(Group::new(root, group_param).unwrap());
+            groups.insert(Group::new(self.dry, root, group_param).unwrap());
         }
 
         // check if any file is actually a group/file
@@ -425,7 +513,7 @@ impl Confine {
         if p.is_dir() {
             // not checking if meta.txt presents in dir, thou it seems like a good idea, because on
             // first mv there'll be no such file
-            let group = Group::new(self.root.clone(), g).unwrap();
+            let group = Group::new(self.dry, self.root.clone(), g).unwrap();
             self.groups.insert(g.to_string(), group.clone());
             return Some(group);
         }

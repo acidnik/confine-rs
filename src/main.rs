@@ -85,6 +85,23 @@ fn main() -> Result<(), Box<error::Error>> {
                 .multiple(true)
             )
         )
+        .subcommand(SubCommand::with_name("delete")
+            .aliases(&["rm"])
+            .about("remove symlink and/or source file")
+            .arg(Arg::with_name("link")
+                 .long("link")
+                 .short("l")
+                 .help("remove only link file (default is to remove both link and source)")
+            )
+            .arg(Arg::with_name("group")
+                 .index(1)
+                 .required(true)
+                 .help("group")
+            )
+            .arg(Arg::with_name("files")
+                .multiple(true)
+            )
+        )
         .get_matches();
 
     let mut app = app::Confine::new(&matches);

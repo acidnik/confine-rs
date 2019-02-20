@@ -17,10 +17,11 @@ OPTIONS:
     -r <root>        config storage root [default: .]
 
 SUBCOMMANDS:
-    help    Prints this message or the help of the given subcommand(s)
-    link    create symlink
-    move    move file under config control
-    undo    undo symlinking, restore original files
+    help      Prints this message or the help of the given subcommand(s)
+    link      create symlink
+    move      move file under config control
+    undo      undo symlinking, restore original files
+    delete    remove symlink and/or source file
 ```
 
 USAGE
@@ -75,6 +76,19 @@ ls -l ~/.bashrc
 -rw-r--r--  /home/user/.bashrc
 ```
 
+The final stage of dotfile lifecycle is obsolesence. When you moved, say, from ack-grep to ag to ripgrep, you leave behind config files that you don't want anymore. This is the time to delete them for good
+```
+$ confine delete common .ackrc .agignore
+# dont forget to git commit and git push
+```
+
+Or maybe you just want to remove the link, but want to keep the original file? This may be a good reason to move it to another group, but for now let's just delete the link
+```
+# rm is alias for delete
+$ confine rm -l common/.zshrc
+# or, you know, just rm ~/.zshrc ;)
+```
+
 TEMPLATES
 ---------
 Some config files, such as .ripgreprc, don't allow using env variables or shell globbing, so there's no easy way
@@ -83,6 +97,7 @@ to set path to ignore file:
 cat ~/.config/ripgrep/config 
 --ignore-file=/Users/nikita/.config/ripgrep/ignore
 ```
+Ugh, the path to home dir varies on different machines
 
 Another example is .gitconfig. Some people want different settings for name and e-mail at home and work machines. Although there's a way to circumvent this problem with some git-config-foo, another way would be using a templates.
 
@@ -107,7 +122,7 @@ Now we can create links:
 confine ln common/.config/ripgrep/config -t home
 ```
 
-Templates are processed using [[tera]] engine and stored in `tune/templates/processed`
+Templates are processed using [tera](https://crates.io/crates/tera) engine and stored in `tune/templates/processed`
 ```
 $ ls -l ~/.config/ripgrep/
 lrwxr-xr-x   config@ -> /Users/user/confne/tune/templates/processed/common/.config/ripgrep/config
