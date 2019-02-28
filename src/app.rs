@@ -230,7 +230,7 @@ impl Confine {
             if self.fs.is_symlink(&dest)? {
                 let dest_canon = dest.canonicalize()?;
                 if dest_canon == src {
-                    warn!("{} is already a link to {}", src.display(), destd);
+                    warn!("{} is already a link to {}", destd, src.display());
                     return Ok(());
                 }
                 warn!("link: destination file {} is symlink, removing", destd);
