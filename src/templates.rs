@@ -47,7 +47,7 @@ impl Templates {
             trace!("no template dir {:?}", tdir);
             return;
         }
-        let control_files = tdir.read_dir().unwrap().map(|f| PathBuf::from(f.unwrap().path())).collect::<Vec<_>>();
+        let control_files = tdir.read_dir().unwrap().map(|f| f.unwrap().path()).collect::<Vec<_>>();
         for cfile in control_files {
             if cfile.extension().map_or(true, |e| e != "toml") {
                 continue
@@ -56,13 +56,13 @@ impl Templates {
             let t = fs::read_to_string(&cfile).unwrap().parse::<toml::Value>().unwrap();
             let table = t.as_table().unwrap();
             trace!("{:?}", table);
-            trace!("{:?} -- {:?}", cfile, table.keys().map(|f| PathBuf::from(f)).collect::<Vec<_>>());
-            self.control_files.insert(cfile.clone(), table.keys().map(|f| PathBuf::from(f)).collect());
+            trace!("{:?} -- {:?}", cfile, table.keys().map(PathBuf::from).collect::<Vec<_>>());
+            self.control_files.insert(cfile.clone(), table.keys().map(PathBuf::from).collect());
             for f in table.keys() {
                 let p = PathBuf::from(f);
-                self.templates.entry(p.clone()).or_insert(Vec::new()).push(cfile.clone());
+                self.templates.entry(p.clone()).or_insert_with(Vec::new).push(cfile.clone());
                 // self.vars.insert(p.clone(), table.get(f).unwrap().as_table().unwrap().clone());
-                self.vars.entry(cfile.clone()).or_insert(HashMap::new()).insert(p.clone(), table.get(f).unwrap().as_table().unwrap().clone());
+                self.vars.entry(cfile.clone()).or_insert_with(HashMap::new).insert(p.clone(), table.get(f).unwrap().as_table().unwrap().clone());
             }
         }
     }
@@ -73,7 +73,7 @@ impl Templates {
             debug!("{} is a template file: required by {:?}", file.display(), cfiles);
             return true;
         }
-        return false;
+        false
     }
 
     pub fn process(&mut self, template_name: &PathBuf, file: &PathBuf, control: &str) -> Result<PathBuf> {

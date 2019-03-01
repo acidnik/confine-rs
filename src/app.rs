@@ -76,7 +76,7 @@ impl Meta {
     }
     fn check(&self, entry: &PathBuf) -> bool {
         // is entry in meta.txt?
-        self.entries.iter().find(|&e| &PathBuf::from(e) == entry).is_some()
+        self.entries.iter().any(|ref e| &PathBuf::from(e) == entry)
     }
 }
 
@@ -89,20 +89,20 @@ struct Group {
 
 impl Group {
     fn new(dry: bool, root: PathBuf, path: &str) -> Result<Self> {
-        if let Some(_) = path.find('/') {
+        if path.find('/').is_some() {
             return Err("Invalid group name")?;
         }
         if path == "backup" {
             return Err("Forbidden group name")?;
         }
-        return Ok(Group { dry: dry, dir: PathBuf::from(path), root: root, });
+        Ok(Group { dry, dir: PathBuf::from(path), root, })
     }
     fn add_meta(&self, entry: &PathBuf) -> Result<()> {
         let mut meta = Meta::new(&self)?;
         meta.add(entry)
     }
     fn abs_path(&self) -> PathBuf {
-        return self.root.join(self.dir.clone())
+        self.root.join(self.dir.clone())
     }
 }
 
@@ -185,11 +185,11 @@ impl Confine {
 
     fn link_files(&mut self, group: Group, files: Vec<PathBuf>) -> Result<()> {
         let meta = Meta::new(&group)?;
-        let files = if files.len() > 0 {
+        let files = if ! files.is_empty() {
             files
         }
         else {
-            meta.list()?.into_iter().map(|f| PathBuf::from(f)).collect()
+            meta.list()?.into_iter().map(PathBuf::from).collect()
         };
         for file in files {
             let mut file = file;
@@ -335,11 +335,11 @@ impl Confine {
 
     fn undo_files(&self, group: Group, files: Vec<PathBuf>) -> Result<()> {
         let meta = Meta::new(&group)?;
-        let files = if files.len() > 0 {
+        let files = if ! files.is_empty() {
             files
         }
         else {
-            meta.list()?.into_iter().map(|f| PathBuf::from(f)).collect()
+            meta.list()?.into_iter().map(PathBuf::from).collect()
         };
         for file in files {
             let mut file = file;
@@ -381,7 +381,7 @@ impl Confine {
     }
     
     fn delete_files(&self, group: Group, files: Vec<PathBuf>) -> Result<()> {
-        if files.len() == 0 {
+        if files.is_empty() {
             warn!("No files specified. Not deleting whole group. Please do `confine undo` and remove whole group directory by hand if you don't need it anymore");
             return Ok(());
         }
@@ -439,11 +439,10 @@ impl Confine {
     fn get_rel_path(&self, file: &PathBuf) -> Result<(String, PathBuf)> {
         // returns meta entry and relative path (relative to home or root dir)
         let home = &self.home;
-        match file.strip_prefix(home) {
-            Ok(rel) => return Ok((rel.display().to_string(), rel.to_path_buf())),
-            Err(_) => {},
+        if let Ok(rel) = file.strip_prefix(home) {
+            return Ok((rel.display().to_string(), rel.to_path_buf()))
         }
-        return match file.strip_prefix(PathBuf::from("/")) {
+        match file.strip_prefix(PathBuf::from("/")) {
             Ok(rel) => Ok((file.display().to_string(), rel.to_path_buf())),
             Err(e) => Err(format!("{}", e))?,
         }
@@ -494,7 +493,7 @@ impl Confine {
     fn get_group_from_file(&mut self, p: &str) -> (Option<Group>, PathBuf) {
         if let Some(idx) = p.find('/') {
             let dir = &p[0..idx];
-            if let Some(group) = self.is_group(dir) {
+            if let Some(group) = self.find_group(dir) {
                 let pf = PathBuf::from(&p[(idx+1)..]);
                 return (Some(group), pf);
             }
@@ -502,8 +501,8 @@ impl Confine {
         (None, PathBuf::from(p))
     }
 
-    fn is_group(&mut self, g: &str) -> Option<Group> {
-        if g.len() == 0 {
+    fn find_group(&mut self, g: &str) -> Option<Group> {
+        if g.is_empty() {
             return None;
         }
         if let Some(group) = self.groups.get(g) {
@@ -517,7 +516,7 @@ impl Confine {
             self.groups.insert(g.to_string(), group.clone());
             return Some(group);
         }
-        return None;
+        None
     }
 
 }
