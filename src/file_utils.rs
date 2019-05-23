@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::fs;
 
-use app::Result;
+use snafu::*;
+use errors::*;
 
 pub struct FileUtils {
     dry: bool,
@@ -23,7 +24,7 @@ impl FileUtils {
     }
 
     pub fn is_symlink(&self, p: &PathBuf) -> Result<bool> {
-        Ok(fs::symlink_metadata(p)?.file_type().is_symlink())
+        Ok(fs::symlink_metadata(p).context(IoError {path: p})?.file_type().is_symlink())
     }
 
     pub fn unlink(&self, p: &PathBuf) -> Result<()> {
@@ -31,7 +32,7 @@ impl FileUtils {
         if self.dry {
             return Ok(());
         }
-        fs_extra::remove_items(&vec![p])?;
+        fs_extra::remove_items(&vec![p]).context(FsError {path: p})?;
 
         Ok(())
     }
@@ -42,7 +43,7 @@ impl FileUtils {
             return Ok(());
         }
 
-        fs::create_dir_all(p)?;
+        fs::create_dir_all(p).context(IoError {path: p})?;
         Ok(())
     }
 
@@ -52,7 +53,7 @@ impl FileUtils {
             return Ok(());
         }
 
-        std::os::unix::fs::symlink(&src, &dst)?;
+        std::os::unix::fs::symlink(&src, &dst).context(IoError {path: src})?;
 
         Ok(())
     }
@@ -69,7 +70,7 @@ impl FileUtils {
         }
 
 
-        fs_extra::copy_items(&vec![src], &dst, &fs_extra::dir::CopyOptions::new())?;
+        fs_extra::copy_items(&vec![src], &dst, &fs_extra::dir::CopyOptions::new()).context(FsError {path: src})?;
 
         Ok(())
     }

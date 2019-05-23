@@ -3,9 +3,11 @@ extern crate toml;
 use std::fs;
 
 use std::path::PathBuf;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
-use app::Result;
+use snafu::*;
+use errors::*;
+
 
 /*
 files in tune/templates - "control files"
@@ -91,22 +93,22 @@ impl Templates {
         };
         let control_file = self.control_files.keys().find(|k| k.file_name().unwrap() == &control[..]);
         if control_file.is_none() {
-            return Err(format!("template description not found: {}", control))?
+            return misc_error!(format!("template description not found: {}", control))
         }
-        let control_file = control_file.unwrap().canonicalize()?;
+        let control_file = control_file.unwrap().canonicalize().context(IoError {path: control_file.unwrap()})?;
         
         debug!("process template config {} with variables from {}", file.display(), control_file.display());
 
         trace!("read {:?}", file);
-        let file_str = fs::read_to_string(&file)?;
+        let file_str = fs::read_to_string(&file).context(IoError {path: file})?;
         let mut context = tera::Context::new();
         let vars = self.vars.get(&control_file);
         if vars.is_none() {
-            return Err(format!("no variables found for file {} in template descripiton {}", file.display(), control_file.display()))?;
+            return misc_error!(format!("no variables found for file {} in template descripiton {}", file.display(), control_file.display()))
         }
         let vars = vars.unwrap().get(template_name);
         if vars.is_none() {
-            return Err(format!("variables for file {} missing in {}", file.display(), control_file.display()))?;
+            return misc_error!(format!("variables for file {} missing in {}", file.display(), control_file.display()))
         }
         let mut vars = vars.unwrap().clone();
         if vars.get("HOME").is_none() {
@@ -116,17 +118,17 @@ impl Templates {
             trace!("{} - {:?}", key, val);
             context.insert(key, val.as_str().unwrap());
         }
-        let processed = tera::Tera::one_off(&file_str, &context, false)?;
+        let processed = tera::Tera::one_off(&file_str, &context, false).context(TemplateError { template_name: file })?;
         trace!("{}", processed);
 
         let tdir = self.root.join("tune/templates/processed/");
         let tdir = tdir.join(template_name.parent().unwrap());
         // TODO dry?
-        fs::create_dir_all(&tdir)?;
+        fs::create_dir_all(&tdir).context(IoError {path: tdir.clone()})?;
         let processed_file = tdir.join(template_name.file_name().unwrap());
 
         trace!("write to {:?}", processed_file);
-        fs::write(&processed_file, &processed)?;
+        fs::write(&processed_file, &processed).context(IoError {path: processed_file.clone()})?;
 
         Ok(processed_file)
     }

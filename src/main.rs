@@ -5,11 +5,15 @@ extern crate env_logger;
 extern crate fs_extra;
 extern crate dirs;
 extern crate hostname;
+extern crate snafu;
 
 use clap::{Arg, App, SubCommand};
 
 use std::error;
+use snafu::*;
 
+#[macro_use]
+mod errors;
 mod app;
 mod templates;
 mod file_utils;
@@ -105,6 +109,14 @@ fn main() -> Result<(), Box<error::Error>> {
         .get_matches();
 
     let mut app = app::Confine::new(&matches);
-    app.run(&matches)?;
+    if let Err(err) = app.run(&matches) {
+        if let Some(backtrace) = ErrorCompat::backtrace(&err) {
+            println!("{}", backtrace);
+        }
+        else {
+            println!("{}", err);
+        }
+        Err(err)?;
+    }
     Ok(())
 }

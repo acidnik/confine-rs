@@ -6,10 +6,12 @@ use std::collections::{HashSet, HashMap};
 use std::fmt;
 use std::io::{self, BufRead};
 use std::fs;
-use std::error;
 
 use templates::Templates;
 use file_utils::FileUtils;
+
+use snafu::*;
+use errors::*;
 
 struct Meta {
     dry: bool,
@@ -21,7 +23,7 @@ impl Meta {
     fn new(group: &Group) -> Result<Self> {
         let meta_file = group.abs_path().join("meta.txt");
         let entries = if meta_file.exists() {
-            io::BufReader::new(fs::File::open(PathBuf::from(&meta_file))?)
+            io::BufReader::new(fs::File::open(PathBuf::from(&meta_file)).context(IoError {path: meta_file.clone()})?)
                 .lines()
                 .map(|l| l.unwrap())
                 .collect::<Vec<_>>()
@@ -38,7 +40,7 @@ impl Meta {
         let entry_str = entry.to_str().unwrap().to_string();
         if ! meta_file.exists() {
             let entry_str = entry.to_str().unwrap().to_string();
-            fs::write(&meta_file, entry_str + "\n")?;
+            fs::write(&meta_file, entry_str + "\n").context(IoError { path: meta_file })?;
             return Ok(());
         }
         let mut lines = self.list()?;
@@ -67,7 +69,7 @@ impl Meta {
         if self.dry {
             return Ok(())
         }
-        fs::write(&self.meta_file, self.entries.join("\n") + "\n")?;
+        fs::write(&self.meta_file, self.entries.join("\n") + "\n").context(IoError {path: &self.meta_file})?;
 
         Ok(())
     }
@@ -89,11 +91,8 @@ struct Group {
 
 impl Group {
     fn new(dry: bool, root: PathBuf, path: &str) -> Result<Self> {
-        if path.find('/').is_some() {
-            return Err("Invalid group name")?;
-        }
-        if path == "backup" {
-            return Err("Forbidden group name")?;
+        if path.find('/').is_some() || path == "backup" {
+            misc_error_file!("Invalid group name", PathBuf::from(path))
         }
         Ok(Group { dry, dir: PathBuf::from(path), root, })
     }
@@ -112,8 +111,6 @@ impl fmt::Display for Group {
     }
 }
 
-
-pub type Result<T> = std::result::Result<T, Box<error::Error>>;
 
 pub struct Confine {
     dry: bool,
@@ -179,7 +176,7 @@ impl Confine {
             self.delete_files(group, files)
         }
         else {
-           return Err("Subcommand missing, see --help")?
+            return misc_error!("Subcommand missing")
         }
     }
 
@@ -195,7 +192,7 @@ impl Confine {
             let mut file = file;
             debug!("link [{}] {}", group, file.display());
             if ! meta.check(&file) {
-                Err(format!("file {} not in meta.txt", file.display()))?
+                misc_error_file!("File not in meta.txt", file.clone())
             }
             self.link_file(&group, &file)?;
         }
@@ -207,7 +204,7 @@ impl Confine {
         let src = if self.templates.needs_template(&template_name) {
             if self.template.is_none() {
                 // self.template is arg to -t <template>
-                Err(format!("file {}: template required", template_name.display()))?
+                misc_error_file!("Template required for file", file.to_path_buf())
             }
             else {
                 self.templates.process(&template_name, &group.abs_path().join(file), &self.template.clone().unwrap())?
@@ -221,14 +218,13 @@ impl Confine {
             self.home.join(file)
         }
         else {
-            return Err("absolute paths are not supported yet")?
-            // file.clone()
+            return misc_error!("absolute paths are not supported yet")
         };
         if dest.exists() {
             let destd = dest.display();
             warn!("link: destination file {} exists", destd);
             if self.fs.is_symlink(&dest)? {
-                let dest_canon = dest.canonicalize()?;
+                let dest_canon = dest.canonicalize().context(IoError { path: dest.clone() })?;
                 if dest_canon == src {
                     warn!("{} is already a link to {}", destd, src.display());
                     return Ok(());
@@ -249,7 +245,7 @@ impl Confine {
 
         if ! src.exists() {
             error!("file {} not found! Please remove it with confine delete", src.display());
-            Err("Source file not found")?
+            misc_error_file!("Source file not found", src.clone())
         }
 
         self.fs.symlink(&src, &dest)?;
@@ -258,8 +254,8 @@ impl Confine {
     }
 
     fn backup_file(&self, group: &Group, path: &PathBuf) -> Result<()> {
-        let path = path.canonicalize()?;
-        let rel_path = path.strip_prefix(self.home.clone())?.to_owned();
+        let path = path.canonicalize().context(IoError {path: path})?;
+        let rel_path = path.strip_prefix(self.home.clone()).context(StripPrefixError {path: path.clone(), prefix: self.home.clone() })?.to_owned();
         let hostname = hostname::get_hostname().unwrap();
         let backup_dest = group.root.join("backup").join(&hostname).join(&rel_path).parent().unwrap().to_owned();
         
@@ -287,7 +283,7 @@ impl Confine {
             file.clone()
         };
         trace!("canon {:?}", file);
-        let real_file = file.canonicalize()?;
+        let real_file = file.canonicalize().context(IoError {path: file.clone()})?;
         trace!("real file = {:?}", real_file);
         /*
             if file is inside a home dir - strip_prefix(~) and save relative path
@@ -310,7 +306,7 @@ impl Confine {
 
         if dest.exists() {
             trace!("rel_path = {:?}", rel_path);
-            return Err(format!("Can not move file {} to {} ({}): file exists", file.display(), group, dest.display()))?;
+            misc_error!(format!("Can not move file {} to {} ({}): file exists", file.display(), group, dest.display()))
         }
 
         self.do_move_file(&file, &dest)?;
@@ -345,7 +341,7 @@ impl Confine {
             let mut file = file;
             debug!("undo link [{}] {}", group, file.display());
             if ! meta.check(&file) {
-                Err(format!("file {} not in meta.txt", file.display()))?
+                misc_error_file!("file not in meta.txt", file.clone())
             }
             self.undo_link_file(&group, &file)?;
         }
@@ -360,19 +356,18 @@ impl Confine {
             self.home.join(file)
         }
         else {
-            return Err("absolute paths are not supported yet")?
-            // file.clone()
+            return misc_error!("absolute paths are not supported yet")
         };
         if ! link_file.exists() {
             // TODO just warning?
-            return Err(format!("{} does not exists, can not undo", link_file.display()))?
+            return misc_error_file!("file does not exists, can not undo", link_file)
         }
         if ! self.fs.is_symlink(&link_file)? {
             warn!("{} is not a symlink, nothing to undo", link_file.display());
             return Ok(());
         }
 
-        let real_file = link_file.canonicalize()?;
+        let real_file = link_file.canonicalize().context(IoError {path: link_file.clone()})?;
 
         self.fs.unlink(&link_file)?;
         self.fs.copy(&real_file, &link_file)?;
@@ -399,13 +394,13 @@ impl Confine {
         // 3. delete from meta
         let mut meta = Meta::new(&group)?;
         if ! meta.check(&file) {
-            return Err(format!("{} is not in meta.txt", file.display()))?
+            return misc_error_file!("file is not in meta.txt", file.to_path_buf())
         }
         let link_file = if file.is_relative() {
             self.home.join(file)
         }
         else {
-            return Err("absolute paths are not supported yet")?
+            return misc_error!("absolute paths are not supported yet")
         };
 
         if link_file.exists() {
@@ -444,7 +439,7 @@ impl Confine {
         }
         match file.strip_prefix(PathBuf::from("/")) {
             Ok(rel) => Ok((file.display().to_string(), rel.to_path_buf())),
-            Err(e) => Err(format!("{}", e))?,
+            Err(e) => misc_error!(format!("{}", e)),
         }
     }
 
@@ -479,10 +474,10 @@ impl Confine {
         }
 
         if groups.len() == 0 {
-            return Err("Group missing")?
+            return misc_error!("Group missing")
         }
         else if groups.len() > 1 {
-            return Err("Too many groups")?
+            return misc_error!("Too many groups")
         }
 
         let group = groups.iter().take(1).collect::<Vec<_>>()[0].clone();
