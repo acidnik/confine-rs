@@ -189,7 +189,6 @@ impl Confine {
             meta.list()?.into_iter().map(PathBuf::from).collect()
         };
         for file in files {
-            let mut file = file;
             debug!("link [{}] {}", group, file.display());
             if ! meta.check(&file) {
                 misc_error_file!("File not in meta.txt", file.clone())
@@ -338,7 +337,6 @@ impl Confine {
             meta.list()?.into_iter().map(PathBuf::from).collect()
         };
         for file in files {
-            let mut file = file;
             debug!("undo link [{}] {}", group, file.display());
             if ! meta.check(&file) {
                 misc_error_file!("file not in meta.txt", file.clone())
@@ -457,7 +455,9 @@ impl Confine {
         let (group, group_file) = self.get_group_from_file(&group_param);
         if let Some(group) = group {
             groups.insert(group);
-            new_files.push(group_file);
+            if let Some(group_file) = group_file {
+                new_files.push(group_file);
+            }
         }
         else {
             let root = self.root.clone();
@@ -467,7 +467,9 @@ impl Confine {
         // check if any file is actually a group/file
         for file in files {
             let (group, new_path) = self.get_group_from_file(&file);
-            new_files.push(new_path); // new_path == path if group is none
+            if let Some(new_path) = new_path {
+                new_files.push(new_path); // new_path == path if group is none
+            }
             if let Some(group) = group {
                 groups.insert(group);
             }
@@ -485,15 +487,20 @@ impl Confine {
         Ok((new_files, group))
     }
 
-    fn get_group_from_file(&mut self, p: &str) -> (Option<Group>, PathBuf) {
+    fn get_group_from_file(&mut self, p: &str) -> (Option<Group>, Option<PathBuf>) {
         if let Some(idx) = p.find('/') {
             let dir = &p[0..idx];
             if let Some(group) = self.find_group(dir) {
-                let pf = PathBuf::from(&p[(idx+1)..]);
+                let pf = if idx < p.len()-1 {
+                    Some(PathBuf::from(&p[(idx+1)..]))
+                }
+                else {
+                    None
+                };
                 return (Some(group), pf);
             }
         }
-        (None, PathBuf::from(p))
+        (None, Some(PathBuf::from(p)))
     }
 
     fn find_group(&mut self, g: &str) -> Option<Group> {
