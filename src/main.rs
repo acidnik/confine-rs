@@ -18,7 +18,7 @@ mod app;
 mod templates;
 mod file_utils;
 
-fn main() -> Result<(), Box<error::Error>> {
+fn main() -> Result<(), Box<dyn error::Error>> {
     let matches = App::new("confine")
         .version("0.0.1")
         .author("Nikita Bilous <nikita@bilous.me>")
